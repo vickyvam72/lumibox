@@ -13,7 +13,6 @@ use jni::objects::{JClass, JString};
 use jni::sys::{jint, jstring};
 use serde_json::{Value, json};
 
-use moviebox_tui::providers::ReleaseProvider;
 use moviebox_tui::providers::models::{CatalogItem, ProviderKind};
 use moviebox_tui::providers::moviebox::adapt;
 use moviebox_tui::service::MovieBoxService;
@@ -176,39 +175,165 @@ pub fn details(subject_id: &str) -> String {
     })
 }
 
+fn truncate(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… (+{} byte)", &text[..end], text.len() - end)
+}
+
+/// Ringkasan isi jawaban play-info, untuk diagnosa kalau tidak ada stream.
+fn describe_play_info(json: &Value) -> String {
+    let data = json.get("data").unwrap_or(json);
+    let Some(streams) = data.get("streams").and_then(|s| s.as_array()) else {
+        let keys: Vec<&str> = data
+            .as_object()
+            .map(|o| o.keys().map(String::as_str).collect())
+            .unwrap_or_default();
+        return format!("tidak ada field 'streams' (field yang ada: {keys:?})");
+    };
+    if streams.is_empty() {
+        return "daftar streams kosong".to_string();
+    }
+    let parts: Vec<String> = streams
+        .iter()
+        .map(|s| {
+            let url = s.get("url").and_then(|u| u.as_str()).unwrap_or("");
+            let host = url
+                .split("://")
+                .nth(1)
+                .and_then(|r| r.split('/').next())
+                .unwrap_or("-");
+            let notice = adapt::is_deprecation_notice_url(url);
+            let cookie = s
+                .get("signCookie")
+                .and_then(|c| c.as_str())
+                .is_some_and(|c| !c.is_empty());
+            format!(
+                "[host={host}, notice={notice}, cookie={cookie}, format={}]",
+                s.get("format").and_then(|f| f.as_str()).unwrap_or("?")
+            )
+        })
+        .collect();
+    format!("{} stream: {}", streams.len(), parts.join(" "))
+}
+
+fn release_key(rel: &moviebox_tui::providers::models::Release) -> Option<String> {
+    rel.direct_url()
+        .map(|u| u.split('?').next().unwrap_or(u).to_string())
+        .filter(|u| !u.is_empty())
+}
+
 pub fn streams(subject_id: &str, season: usize, episode: usize) -> String {
     RUNTIME.block_on(async {
-        match SERVICE
-            .client
-            .episode_streams(subject_id, season, episode)
-            .await
-        {
-            Ok(releases) => {
-                let list: Vec<Value> = releases
-                    .iter()
-                    .filter_map(|rel| {
-                        let mirror = rel.mirrors.first()?;
-                        let height = if rel.is_multi_resolution() {
-                            0
-                        } else {
-                            rel.resolution_u64()
-                        };
-                        Some(json!({
-                            "label": mirror.label,
-                            "quality": rel.quality,
-                            "height": height,
-                            "codec": rel.codec,
-                            "sizeBytes": rel.size_bytes,
-                            "url": mirror.resolver_url,
-                            "headers": mirror.headers,
-                            "resourceId": rel.resource_id,
-                        }))
-                    })
-                    .collect();
-                ok(json!(list))
+        let client = &SERVICE.client;
+        let page = if episode > 0 { (episode - 1) / 20 + 1 } else { 1 };
+        // Sama seperti ReleaseProvider::episode_streams di core, tapi alasan gagal tidak dibuang.
+        let (play_info, resources) = tokio::join!(
+            client.get_play_info(subject_id, season, episode),
+            client.get_resources(subject_id, season, episode, page, None, 20),
+        );
+
+        let mut releases = Vec::new();
+        let mut seen = HashSet::new();
+        let mut diag = vec![format!(
+            "subjectId={subject_id} season={season} episode={episode}"
+        )];
+
+        match &play_info {
+            Ok(json) => {
+                diag.push(format!("play-info: {}", describe_play_info(json)));
+                for rel in adapt::moviebox_play_info_json_to_releases(
+                    json,
+                    season,
+                    episode,
+                    client.user_agent(),
+                ) {
+                    if let Some(key) = release_key(&rel) {
+                        seen.insert(key);
+                    }
+                    releases.push(rel);
+                }
             }
-            Err(e) => err(e.user_message(ProviderKind::MovieBox)),
+            Err(e) => diag.push(format!("play-info GAGAL: {e}")),
         }
+
+        match &resources {
+            Ok(json) => {
+                let all = adapt::moviebox_resource_json_to_releases(json);
+                let raw_count = json
+                    .get("list")
+                    .and_then(|l| l.as_array())
+                    .map(|l| l.len())
+                    .unwrap_or(0);
+                diag.push(format!(
+                    "resource: {raw_count} item mentah, {} punya link",
+                    all.len()
+                ));
+                for rel in all {
+                    if let Some(key) = release_key(&rel) {
+                        if !seen.insert(key) {
+                            continue;
+                        }
+                    }
+                    if (season == 0 && episode == 0)
+                        || (rel.season == Some(season) && rel.episode == Some(episode))
+                        || (rel.season.is_none() && rel.episode.is_none())
+                    {
+                        releases.push(rel);
+                    }
+                }
+            }
+            Err(e) => diag.push(format!("resource GAGAL: {e}")),
+        }
+
+        if releases.is_empty() {
+            let raw = |r: &Result<Value, _>| match r {
+                Ok(v) => truncate(&v.to_string(), 2500),
+                Err(_) => "-".to_string(),
+            };
+            diag.push(format!("--- play-info mentah ---\n{}", raw(&play_info)));
+            diag.push(format!("--- resource mentah ---\n{}", raw(&resources)));
+            return json!({
+                "ok": false,
+                "error": "Server MovieBox tidak memberikan link video untuk judul ini.",
+                "debug": diag.join("\n"),
+            })
+            .to_string();
+        }
+
+        releases.sort_by(|a, b| {
+            b.resolution_u64()
+                .cmp(&a.resolution_u64())
+                .then_with(|| b.size_bytes.cmp(&a.size_bytes))
+        });
+
+        let list: Vec<Value> = releases
+            .iter()
+            .filter_map(|rel| {
+                let mirror = rel.mirrors.first()?;
+                let height = if rel.is_multi_resolution() {
+                    0
+                } else {
+                    rel.resolution_u64()
+                };
+                Some(json!({
+                    "label": mirror.label,
+                    "quality": rel.quality,
+                    "height": height,
+                    "codec": rel.codec,
+                    "sizeBytes": rel.size_bytes,
+                    "url": mirror.resolver_url,
+                    "headers": mirror.headers,
+                    "resourceId": rel.resource_id,
+                }))
+            })
+            .collect();
+        ok(json!(list))
     })
 }
 

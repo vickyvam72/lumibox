@@ -9,12 +9,15 @@ import java.io.IOException
 /** Tab beranda MovieBox yang dipakai versi TUI untuk "Browse". */
 const val HOME_TAB_ID = "2"
 
+/** Error dari core Rust, opsional membawa info teknis untuk diagnosa. */
+class BridgeException(message: String, val debug: String?) : IOException(message)
+
 object Repo {
 
     private fun unwrap(raw: String): Any? {
         val obj = JSONObject(raw)
         if (!obj.optBoolean("ok", false)) {
-            throw IOException(obj.str("error") ?: "Terjadi kesalahan")
+            throw BridgeException(obj.str("error") ?: "Terjadi kesalahan", obj.str("debug"))
         }
         return if (obj.isNull("data")) null else obj.get("data")
     }

@@ -56,7 +56,10 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -64,7 +67,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import android.widget.Toast
 import com.moviebox.app.PlayerActivity
+import com.moviebox.app.data.BridgeException
 import com.moviebox.app.data.Details
 import com.moviebox.app.data.Repo
 import com.moviebox.app.data.Stream
@@ -112,6 +117,7 @@ private data class Picker(
     val loading: Boolean = true,
     val streams: List<Stream> = emptyList(),
     val error: String? = null,
+    val debug: String? = null,
 )
 
 @Composable
@@ -156,7 +162,11 @@ fun DetailScreen(subjectId: String, onBack: () -> Unit) {
                     else -> picker = picker?.copy(loading = false, streams = streams)
                 }
             } catch (e: Exception) {
-                picker = picker?.copy(loading = false, error = e.message ?: "Gagal mengambil sumber video")
+                picker = picker?.copy(
+                    loading = false,
+                    error = e.message ?: "Gagal mengambil sumber video",
+                    debug = (e as? BridgeException)?.debug,
+                )
             }
         }
     }
@@ -429,7 +439,7 @@ private fun QualityDialog(picker: Picker, onPick: (Stream) -> Unit, onDismiss: (
                     contentAlignment = Alignment.Center,
                 ) { CircularProgressIndicator(Modifier.size(32.dp)) }
 
-                picker.error != null -> Text(picker.error)
+                picker.error != null -> ErrorDetails(picker.error, picker.debug)
 
                 else -> Column(Modifier.verticalScroll(rememberScrollState())) {
                     picker.streams.forEach { s ->
@@ -456,4 +466,41 @@ private fun QualityDialog(picker: Picker, onPick: (Stream) -> Unit, onDismiss: (
             TextButton(onClick = onDismiss) { Text("Tutup") }
         },
     )
+}
+
+@Composable
+private fun ErrorDetails(error: String, debug: String?) {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    var showDebug by remember { mutableStateOf(false) }
+    Column(Modifier.verticalScroll(rememberScrollState())) {
+        Text(error)
+        if (debug != null) {
+            Spacer(Modifier.height(12.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { showDebug = !showDebug }) {
+                    Text(if (showDebug) "Sembunyikan info" else "Info teknis")
+                }
+                OutlinedButton(onClick = {
+                    clipboard.setText(AnnotatedString(debug))
+                    Toast.makeText(context, "Info teknis disalin", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text("Salin")
+                }
+            }
+            if (showDebug) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    debug,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(8.dp),
+                )
+            }
+        }
+    }
 }
