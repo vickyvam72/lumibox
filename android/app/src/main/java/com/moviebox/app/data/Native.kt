@@ -11,6 +11,7 @@ object Native {
     }
 
     @JvmStatic external fun initCore(filesDir: String, cacheDir: String): String
+    @JvmStatic external fun warmup(): String
     @JvmStatic external fun homepage(tabId: String, page: Int): String
     @JvmStatic external fun search(query: String, page: Int): String
     @JvmStatic external fun details(subjectId: String): String

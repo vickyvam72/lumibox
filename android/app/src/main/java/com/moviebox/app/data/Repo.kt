@@ -1,6 +1,9 @@
 package com.moviebox.app.data
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -13,6 +16,19 @@ const val HOME_TAB_ID = "2"
 class BridgeException(message: String, val debug: String?) : IOException(message)
 
 object Repo {
+
+    /** Scope latar untuk prefetch (tidak terikat layar). */
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** Ambil stream lebih awal supaya saat tombol Putar ditekan hasilnya sudah ada di cache. */
+    fun prefetch(id: String, season: Int, episode: Int) {
+        if (id.isBlank()) return
+        background.launch { runCatching { Native.streams(id, season, episode) } }
+    }
+
+    fun warmup() {
+        background.launch { runCatching { Native.warmup() } }
+    }
 
     private fun unwrap(raw: String): Any? {
         val obj = JSONObject(raw)
@@ -42,7 +58,19 @@ object Repo {
             .distinctBy { it.id }
     }
 
-    suspend fun details(id: String): Details = withContext(Dispatchers.IO) {
+    private val detailsCache = java.util.concurrent.ConcurrentHashMap<String, Details>()
+
+    /** Detail yang sudah pernah dimuat (dipakai pemutar supaya tidak menunggu lagi). */
+    fun cachedDetails(id: String): Details? = detailsCache[id]
+
+    suspend fun details(id: String): Details {
+        detailsCache[id]?.let { return it }
+        val d = fetchDetails(id)
+        detailsCache[id] = d
+        return d
+    }
+
+    private suspend fun fetchDetails(id: String): Details = withContext(Dispatchers.IO) {
         val d = unwrap(Native.details(id)) as? JSONObject ?: throw IOException("Detail kosong")
         Details(
             id = d.optJSONObject("id")?.str("value") ?: id,
@@ -62,6 +90,10 @@ object Repo {
                     episodes = s.optJSONArray("episodes").objects().map { it.optInt("number", 1) },
                 )
             }.filter { it.episodes.isNotEmpty() },
+            dubs = d.optJSONArray("dubs").objects().mapNotNull { dub ->
+                val sid = dub.str("subject_id") ?: return@mapNotNull null
+                Dub(sid, dub.str("label") ?: dub.str("language") ?: "Audio", dub.str("language"))
+            }.distinctBy { it.subjectId },
             originalSubjectId = d.str("original_subject_id"),
             originalLanguage = d.str("original_language"),
             country = d.str("country"),

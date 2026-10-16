@@ -33,9 +33,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.moviebox.app.data.Details
+import android.net.Uri
+import com.moviebox.app.data.AddonCatalog
 import com.moviebox.app.data.Library
+import com.moviebox.app.data.Resolver
 import com.moviebox.app.data.Title
+import com.moviebox.app.data.TitleStore
+import com.moviebox.app.ui.CategoryScreen
 import com.moviebox.app.ui.Accent
 import com.moviebox.app.ui.Background
 import com.moviebox.app.ui.DetailScreen
@@ -70,17 +74,14 @@ private enum class Tab(val route: String, val label: String) {
 
 /** Putar langsung: film dari awal/terakhir, serial dari episode terakhir atau episode pertama. */
 fun playTitle(context: Context, item: Title) {
-    val watched = Library.entry(item.id)
+    val subjectId = Resolver.cached(item).orEmpty()
+    val watched = if (subjectId.isNotBlank()) Library.entry(subjectId) else null
     val (season, episode) = when {
         !item.isSeries -> 0 to 0
         watched != null && watched.season > 0 -> watched.season to watched.episode
         else -> -1 to -1
     }
-    PlayerActivity.start(context, item.id, item.title, item.poster, item.isSeries, season, episode)
-}
-
-fun playDetails(context: Context, d: Details, season: Int, episode: Int) {
-    PlayerActivity.start(context, d.id, d.title, d.poster, d.isSeries, season, episode)
+    PlayerActivity.start(context, item.copy(id = subjectId), season, episode)
 }
 
 @Composable
@@ -93,12 +94,15 @@ private fun LumiApp() {
     val route = backStack?.destination?.route
     val showBar = Tab.entries.any { it.route == route }
 
+    val details: (Title) -> Unit = { item ->
+        nav.navigate("details/${Uri.encode(TitleStore.put(item))}")
+    }
     // Film → langsung putar. Serial → halaman detail (pilih episode).
     val open: (Title) -> Unit = { item ->
-        if (item.isSeries) nav.navigate("details/${item.id}") else playTitle(context, item)
+        if (item.isSeries) details(item) else playTitle(context, item)
     }
-    val details: (Title) -> Unit = { item -> nav.navigate("details/${item.id}") }
     val play: (Title) -> Unit = { item -> playTitle(context, item) }
+    val category: (AddonCatalog) -> Unit = { c -> nav.navigate("category/${Uri.encode(c.key)}") }
 
     Scaffold(
         containerColor = Background,
@@ -111,7 +115,7 @@ private fun LumiApp() {
         ) {
             NavHost(navController = nav, startDestination = Tab.HOME.route) {
                 composable(Tab.HOME.route) {
-                    HomeScreen(vm = homeVm, onOpen = open, onDetails = details, onPlay = play)
+                    HomeScreen(vm = homeVm, onOpen = open, onDetails = details, onPlay = play, onCategory = category)
                 }
                 composable(Tab.SEARCH.route) {
                     SearchScreen(suggestions = homeVm.allTitles(), onOpen = open, onDetails = details)
@@ -120,13 +124,24 @@ private fun LumiApp() {
                     MyScreen(onOpen = open, onPlay = play, onDetails = details)
                 }
                 composable(
-                    route = "details/{id}",
-                    arguments = listOf(navArgument("id") { type = NavType.StringType }),
+                    route = "details/{key}",
+                    arguments = listOf(navArgument("key") { type = NavType.StringType }),
                 ) { entry ->
                     DetailScreen(
-                        subjectId = entry.arguments?.getString("id").orEmpty(),
+                        titleKey = Uri.decode(entry.arguments?.getString("key").orEmpty()),
                         onBack = { nav.popBackStack() },
-                        onPlay = { d, s, e -> playDetails(context, d, s, e) },
+                        onPlay = { t, s, e -> PlayerActivity.start(context, t, s, e) },
+                    )
+                }
+                composable(
+                    route = "category/{key}",
+                    arguments = listOf(navArgument("key") { type = NavType.StringType }),
+                ) { entry ->
+                    CategoryScreen(
+                        key = Uri.decode(entry.arguments?.getString("key").orEmpty()),
+                        onBack = { nav.popBackStack() },
+                        onOpen = open,
+                        onDetails = details,
                     )
                 }
             }

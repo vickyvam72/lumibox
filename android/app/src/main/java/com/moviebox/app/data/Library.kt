@@ -38,10 +38,10 @@ object Library {
         if (history.removeAll { it.id == id }) persistHistory()
     }
 
-    fun isInList(id: String): Boolean = myList.any { it.id == id }
+    fun isInList(key: String): Boolean = myList.any { it.key == key }
 
     fun toggleList(item: Title) {
-        if (!myList.removeAll { it.id == item.id }) myList.add(0, item)
+        if (!myList.removeAll { it.key == item.key }) myList.add(0, item)
         persistList()
     }
 
@@ -60,7 +60,8 @@ object Library {
                     .put("episode", h.episode)
                     .put("position", h.positionMs)
                     .put("duration", h.durationMs)
-                    .put("updatedAt", h.updatedAt),
+                    .put("updatedAt", h.updatedAt)
+                    .put("imdbId", h.imdbId ?: JSONObject.NULL),
             )
         }
         prefs.edit().putString("history", arr.toString()).apply()
@@ -79,6 +80,7 @@ object Library {
                 positionMs = o.optLong("position"),
                 durationMs = o.optLong("duration"),
                 updatedAt = o.optLong("updatedAt"),
+                imdbId = o.str("imdbId"),
             )
         }
     }.getOrDefault(emptyList())
@@ -92,7 +94,13 @@ object Library {
                     .put("title", t.title)
                     .put("isSeries", t.isSeries)
                     .put("year", t.year ?: JSONObject.NULL)
-                    .put("poster", t.poster ?: JSONObject.NULL),
+                    .put("poster", t.poster ?: JSONObject.NULL)
+                    .put("imdbId", t.imdbId ?: JSONObject.NULL)
+                    .put("backdrop", t.backdrop ?: JSONObject.NULL)
+                    .put("logo", t.logo ?: JSONObject.NULL)
+                    .put("rating", t.rating ?: JSONObject.NULL)
+                    .put("description", t.description ?: JSONObject.NULL)
+                    .put("genres", JSONArray(t.genres)),
             )
         }
         prefs.edit().putString("my_list", arr.toString()).apply()
@@ -107,6 +115,12 @@ object Library {
                 isSeries = o.optBoolean("isSeries"),
                 year = o.str("year"),
                 poster = o.str("poster"),
+                imdbId = o.str("imdbId"),
+                backdrop = o.str("backdrop"),
+                logo = o.str("logo"),
+                rating = o.str("rating"),
+                description = o.str("description"),
+                genres = o.optJSONArray("genres").strings(),
             )
         }
     }.getOrDefault(emptyList())

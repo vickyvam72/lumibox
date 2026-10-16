@@ -4,7 +4,7 @@
 //! `{"ok": true, "data": ...}` or `{"ok": false, "error": "..."}`.
 //! Kotlin must call them from a background thread (Dispatchers.IO).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::LazyLock;
 
@@ -253,33 +253,82 @@ fn release_key(rel: &moviebox_tui::providers::models::Release) -> Option<String>
         .filter(|u| !u.is_empty())
 }
 
+/// Hasil stream disimpan sebentar supaya putar ulang / prefetch langsung instan.
+static STREAM_CACHE: LazyLock<std::sync::Mutex<HashMap<String, (std::time::Instant, String)>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+const STREAM_TTL: std::time::Duration = std::time::Duration::from_secs(20 * 60);
+
 pub fn streams(subject_id: &str, season: usize, episode: usize) -> String {
+    let key = format!("{subject_id}:{season}:{episode}");
+    if let Ok(cache) = STREAM_CACHE.lock() {
+        if let Some((at, value)) = cache.get(&key) {
+            if at.elapsed() < STREAM_TTL {
+                return value.clone();
+            }
+        }
+    }
+    let result = RUNTIME.block_on(streams_uncached(subject_id, season, episode));
+    if result.starts_with("{\"ok\":true") {
+        if let Ok(mut cache) = STREAM_CACHE.lock() {
+            cache.retain(|_, (at, _)| at.elapsed() < STREAM_TTL);
+            cache.insert(key, (std::time::Instant::now(), result.clone()));
+        }
+    }
+    result
+}
+
+pub fn warmup() -> String {
     RUNTIME.block_on(async {
-        let client = &SERVICE.client;
-        let page = if episode > 0 { (episode - 1) / 20 + 1 } else { 1 };
-        // Sama seperti ReleaseProvider::episode_streams di core, tapi alasan gagal tidak dibuang.
-        let (play_info, resources) = tokio::join!(
-            client.get_play_info(subject_id, season, episode),
-            client.get_resources(subject_id, season, episode, page, None, 20),
-        );
+        let _ = tokio::join!(web::ENGINE.warmup(), SERVICE.client.ensure_session());
+    });
+    ok(json!(true))
+}
 
-        let mut diag = vec![format!(
-            "subjectId={subject_id} season={season} episode={episode}"
-        )];
+async fn streams_uncached(subject_id: &str, season: usize, episode: usize) -> String {
+    let mut diag = vec![format!(
+        "subjectId={subject_id} season={season} episode={episode}"
+    )];
 
-        // 1) Jalur baru (port dari Moviebox-API): web H5 + identitas app terbaru.
-        let fresh = web::ENGINE
-            .streams(subject_id, season, episode, &mut diag)
-            .await;
+    // 1) Jalur baru (port dari Moviebox-API): web H5 paralel + play-info identitas baru.
+    let fresh = web::ENGINE
+        .streams(subject_id, season, episode, &mut diag)
+        .await;
+    if !fresh.is_empty() {
+        return ok(json!(sort_streams(fresh)));
+    }
 
-        let mut releases = Vec::new();
-        let mut seen: HashSet<String> = fresh
-            .iter()
-            .filter_map(|v| v.get("url").and_then(|u| u.as_str()))
-            .map(|u| u.split('?').next().unwrap_or(u).to_string())
-            .collect();
-        diag.push("--- jalur lama (core) ---".to_string());
+    // 2) Cadangan: jalur lama core.
+    diag.push("--- jalur lama (core) ---".to_string());
+    match legacy_streams(subject_id, season, episode, &mut diag).await {
+        Some(list) => ok(json!(list)),
+        None => json!({
+            "ok": false,
+            "error": "Server MovieBox tidak memberikan link video untuk judul ini.",
+            "debug": diag.join("\n"),
+        })
+        .to_string(),
+    }
+}
 
+fn sort_streams(mut list: Vec<Value>) -> Vec<Value> {
+    list.sort_by_key(|v| std::cmp::Reverse(v.get("height").and_then(|h| h.as_u64()).unwrap_or(0)));
+    list
+}
+
+async fn legacy_streams(
+    subject_id: &str,
+    season: usize,
+    episode: usize,
+    diag: &mut Vec<String>,
+) -> Option<Vec<Value>> {
+    let client = &SERVICE.client;
+    let page = if episode > 0 { (episode - 1) / 20 + 1 } else { 1 };
+    let (play_info, resources) = tokio::join!(
+        client.get_play_info(subject_id, season, episode),
+        client.get_resources(subject_id, season, episode, page, None, 20),
+    );
+    let mut releases = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
         match &play_info {
             Ok(json) => {
                 diag.push(format!("play-info: {}", describe_play_info(json)));
@@ -327,29 +376,22 @@ pub fn streams(subject_id: &str, season: usize, episode: usize) -> String {
             Err(e) => diag.push(format!("resource GAGAL: {e}")),
         }
 
-        if releases.is_empty() && fresh.is_empty() {
-            let raw = |r: &Result<Value, _>| match r {
-                Ok(v) => truncate(&v.to_string(), 2500),
-                Err(_) => "-".to_string(),
-            };
-            diag.push(format!("--- play-info mentah ---\n{}", raw(&play_info)));
-            diag.push(format!("--- resource mentah ---\n{}", raw(&resources)));
-            return json!({
-                "ok": false,
-                "error": "Server MovieBox tidak memberikan link video untuk judul ini.",
-                "debug": diag.join("\n"),
-            })
-            .to_string();
-        }
-
         releases.sort_by(|a, b| {
             b.resolution_u64()
                 .cmp(&a.resolution_u64())
                 .then_with(|| b.size_bytes.cmp(&a.size_bytes))
         });
-
-        let mut list: Vec<Value> = fresh;
-        list.extend(releases
+    if releases.is_empty() {
+        let raw = |r: &Result<Value, _>| match r {
+            Ok(v) => truncate(&v.to_string(), 2500),
+            Err(_) => "-".to_string(),
+        };
+        diag.push(format!("--- play-info mentah ---\n{}", raw(&play_info)));
+        diag.push(format!("--- resource mentah ---\n{}", raw(&resources)));
+        return None;
+    }
+    Some(
+        releases
             .iter()
             .filter_map(|rel| {
                 let mirror = rel.mirrors.first()?;
@@ -368,10 +410,9 @@ pub fn streams(subject_id: &str, season: usize, episode: usize) -> String {
                     "headers": mirror.headers,
                     "resourceId": rel.resource_id,
                 }))
-            }));
-        list.sort_by_key(|v| std::cmp::Reverse(v.get("height").and_then(|h| h.as_u64()).unwrap_or(0)));
-        ok(json!(list))
-    })
+            })
+            .collect(),
+    )
 }
 
 pub fn captions(subject_id: &str, resource_id: &str, season: usize, episode: usize) -> String {
@@ -418,6 +459,14 @@ pub extern "system" fn Java_com_moviebox_app_data_Native_initCore<'l>(
     let files_dir = read(&mut env, &files_dir);
     let cache_dir = read(&mut env, &cache_dir);
     guarded(&mut env, || init(&files_dir, &cache_dir))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_moviebox_app_data_Native_warmup<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+) -> jstring {
+    guarded(&mut env, warmup)
 }
 
 #[unsafe(no_mangle)]

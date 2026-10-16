@@ -2,8 +2,11 @@ package com.moviebox.app
 
 import android.app.Application
 import android.util.Log
+import com.moviebox.app.data.Addon
 import com.moviebox.app.data.Library
 import com.moviebox.app.data.Native
+import com.moviebox.app.data.Repo
+import com.moviebox.app.data.Resolver
 
 class App : Application() {
     override fun onCreate() {
@@ -12,5 +15,9 @@ class App : Application() {
         val result = Native.initCore(filesDir.absolutePath, cacheDir.absolutePath)
         Log.i("LumiBox", "core init: $result")
         Library.init(this)
+        Addon.init(this)
+        Resolver.init(this)
+        // Siapkan token/sesi MovieBox di latar supaya putar pertama lebih cepat.
+        Repo.warmup()
     }
 }

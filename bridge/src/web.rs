@@ -5,7 +5,10 @@
 //! "notice" 23 detik. Di sini dipakai identitas `com.community.mbox.in` 4.0.03 dan
 //! endpoint web `wefeed-h5api-bff/subject/play`, sama seperti api.py.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+use futures::StreamExt;
+use futures::stream::FuturesUnordered;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -34,6 +37,8 @@ pub struct WebEngine {
     http: reqwest::Client,
     client_info: String,
     token: Mutex<Option<String>>,
+    detail_paths: Mutex<HashMap<String, String>>,
+    good_domain: Mutex<Option<String>>,
 }
 
 pub static ENGINE: LazyLock<WebEngine> = LazyLock::new(WebEngine::new);
@@ -130,6 +135,8 @@ impl WebEngine {
             http,
             client_info,
             token: Mutex::new(None),
+            detail_paths: Mutex::new(HashMap::new()),
+            good_domain: Mutex::new(None),
         }
     }
 
@@ -249,7 +256,26 @@ impl WebEngine {
         Ok(path.to_string())
     }
 
-    /// Port dari MovieBoxEngine.get_streams(): web H5 API dulu, lalu play-info native.
+    async fn detail_path_cached(&self, subject_id: &str) -> Result<String, String> {
+        if let Some(p) = self.detail_paths.lock().await.get(subject_id) {
+            return Ok(p.clone());
+        }
+        let p = self.detail_path(subject_id).await?;
+        self.detail_paths
+            .lock()
+            .await
+            .insert(subject_id.to_string(), p.clone());
+        Ok(p)
+    }
+
+    /// Siapkan token lebih awal supaya tombol putar pertama terasa cepat.
+    pub async fn warmup(&self) {
+        let _ = self.token(false).await;
+    }
+
+    /// Port dari MovieBoxEngine.get_streams(), tapi paralel:
+    /// semua domain web dicoba bersamaan (yang pertama berhasil dipakai),
+    /// dan play-info native jalan berbarengan.
     pub async fn streams(
         &self,
         subject_id: &str,
@@ -257,106 +283,128 @@ impl WebEngine {
         episode: usize,
         diag: &mut Vec<String>,
     ) -> Vec<Value> {
-        let mut out = Vec::new();
-        let mut seen = HashSet::new();
+        let web = async {
+            let mut lines = Vec::new();
+            let (detail_path, token) =
+                tokio::join!(self.detail_path_cached(subject_id), self.token(false));
+            let detail_path = match detail_path {
+                Ok(p) => {
+                    lines.push(format!("web: detailPath='{p}'"));
+                    p
+                }
+                Err(e) => {
+                    lines.push(format!("web: detailPath gagal: {e}"));
+                    String::new()
+                }
+            };
+            let token = match token {
+                Ok(t) => t,
+                Err(e) => {
+                    lines.push(format!("web: {e}"));
+                    return (Vec::new(), lines);
+                }
+            };
 
-        let detail_path = match self.detail_path(subject_id).await {
-            Ok(p) => {
-                diag.push(format!("web: detailPath='{p}'"));
-                p
+            // Domain yang terakhir berhasil dicoba paling depan.
+            let preferred = self.good_domain.lock().await.clone();
+            let mut domains: Vec<&str> = WEB_DOMAINS.to_vec();
+            if let Some(p) = preferred.as_deref() {
+                domains.sort_by_key(|d| *d != p);
             }
-            Err(e) => {
-                diag.push(format!("web: detailPath gagal: {e}"));
-                String::new()
-            }
-        };
 
-        match self.token(false).await {
-            Ok(token) => {
-                for domain in WEB_DOMAINS {
-                    let found = self
-                        .web_play(
-                            domain,
-                            &token,
-                            subject_id,
-                            season,
-                            episode,
-                            &detail_path,
-                            &mut seen,
-                            &mut out,
-                            diag,
-                        )
-                        .await;
-                    if found {
-                        break;
+            let mut pending: FuturesUnordered<_> = domains
+                .iter()
+                .map(|domain| {
+                    let token = token.clone();
+                    let detail_path = detail_path.clone();
+                    async move {
+                        let r = self
+                            .web_play(domain, &token, subject_id, season, episode, &detail_path)
+                            .await;
+                        (*domain, r)
                     }
+                })
+                .collect();
+
+            while let Some((domain, (items, line))) = pending.next().await {
+                lines.push(line);
+                if !items.is_empty() {
+                    *self.good_domain.lock().await = Some(domain.to_string());
+                    return (items, lines);
                 }
             }
-            Err(e) => diag.push(format!("web: {e}")),
-        }
+            (Vec::new(), lines)
+        };
 
-        match self
+        let native = self.native_play(subject_id, season, episode);
+        let ((web_items, web_lines), (native_items, native_line)) = tokio::join!(web, native);
+        diag.extend(web_lines);
+        diag.push(native_line);
+
+        let mut seen = HashSet::new();
+        let mut out = Vec::new();
+        for v in web_items.into_iter().chain(native_items) {
+            let url = v.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string();
+            if !url.is_empty() && seen.insert(url) {
+                out.push(v);
+            }
+        }
+        out
+    }
+
+    async fn native_play(&self, subject_id: &str, season: usize, episode: usize) -> (Vec<Value>, String) {
+        let body = match self
             .native_get(&format!(
                 "/wefeed-mobile-bff/subject-api/play-info?subjectId={subject_id}&se={season}&ep={episode}"
             ))
             .await
         {
-            Ok(body) => {
-                let data = body.get("data").unwrap_or(&body);
-                let streams = data
-                    .get("streams")
-                    .and_then(|s| s.as_array())
-                    .cloned()
-                    .unwrap_or_default();
-                let mut added = 0;
-                for st in &streams {
-                    let raw_url = st.get("url").and_then(|u| u.as_str()).unwrap_or("");
-                    let duration = as_u64(st.get("duration"));
-                    let cookie = st.get("signCookie").and_then(|c| c.as_str()).unwrap_or("");
-                    let policy = if cookie.is_empty() {
-                        None
-                    } else {
-                        mpd_from_sign_cookie(cookie)
-                    };
-                    if policy.is_none() && (raw_url.is_empty() || is_notice(raw_url, duration)) {
-                        continue;
-                    }
-                    let url = policy.unwrap_or_else(|| raw_url.to_string());
-                    if !seen.insert(url.clone()) {
-                        continue;
-                    }
-                    let res = st.get("resolutions").and_then(|r| r.as_str()).unwrap_or("");
-                    let mut headers = vec![
-                        ("User-Agent".to_string(), MODERN_USER_AGENT.to_string()),
-                        ("Referer".to_string(), "https://api3.aoneroom.com/".to_string()),
-                    ];
-                    if !cookie.is_empty() {
-                        headers.push(("Cookie".to_string(), clean_cookie(cookie)));
-                    }
-                    out.push(stream_json(
-                        "App",
-                        st.get("format").and_then(|f| f.as_str()).unwrap_or("MP4"),
-                        best_height(res),
-                        st.get("codecName").and_then(|c| c.as_str()),
-                        as_u64(st.get("size")),
-                        &url,
-                        headers,
-                        as_id(st.get("id")),
-                    ));
-                    added += 1;
-                }
-                diag.push(format!(
-                    "native baru: {} stream, {added} bisa dipakai",
-                    streams.len()
-                ));
+            Ok(b) => b,
+            Err(e) => return (Vec::new(), format!("native baru GAGAL: {e}")),
+        };
+        let data = body.get("data").unwrap_or(&body);
+        let streams = data
+            .get("streams")
+            .and_then(|s| s.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut out = Vec::new();
+        for st in &streams {
+            let raw_url = st.get("url").and_then(|u| u.as_str()).unwrap_or("");
+            let duration = as_u64(st.get("duration"));
+            let cookie = st.get("signCookie").and_then(|c| c.as_str()).unwrap_or("");
+            let policy = if cookie.is_empty() {
+                None
+            } else {
+                mpd_from_sign_cookie(cookie)
+            };
+            if policy.is_none() && (raw_url.is_empty() || is_notice(raw_url, duration)) {
+                continue;
             }
-            Err(e) => diag.push(format!("native baru GAGAL: {e}")),
+            let url = policy.unwrap_or_else(|| raw_url.to_string());
+            let res = st.get("resolutions").and_then(|r| r.as_str()).unwrap_or("");
+            let mut headers = vec![
+                ("User-Agent".to_string(), MODERN_USER_AGENT.to_string()),
+                ("Referer".to_string(), "https://api3.aoneroom.com/".to_string()),
+            ];
+            if !cookie.is_empty() {
+                headers.push(("Cookie".to_string(), clean_cookie(cookie)));
+            }
+            out.push(stream_json(
+                "App",
+                st.get("format").and_then(|f| f.as_str()).unwrap_or("MP4"),
+                best_height(res),
+                st.get("codecName").and_then(|c| c.as_str()),
+                as_u64(st.get("size")),
+                &url,
+                headers,
+                as_id(st.get("id")),
+            ));
         }
-
-        out
+        let line = format!("native baru: {} stream, {} bisa dipakai", streams.len(), out.len());
+        (out, line)
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn web_play(
         &self,
         domain: &str,
@@ -365,10 +413,7 @@ impl WebEngine {
         season: usize,
         episode: usize,
         detail_path: &str,
-        seen: &mut HashSet<String>,
-        out: &mut Vec<Value>,
-        diag: &mut Vec<String>,
-    ) -> bool {
+    ) -> (Vec<Value>, String) {
         let play_url = format!(
             "{domain}/wefeed-h5api-bff/subject/play?subjectId={subject_id}&se={season}&ep={episode}&detailPath={detail_path}&streamSignType=1&supportCodecs%5Bhevc%5D=1&supportCodecs%5Bh264%5D=1"
         );
@@ -391,27 +436,20 @@ impl WebEngine {
             .http
             .get(&play_url)
             .headers(h)
-            .timeout(Duration::from_secs(12))
+            .timeout(Duration::from_secs(10))
             .send()
             .await
         {
             Ok(r) => r,
-            Err(e) => {
-                diag.push(format!("web {host}: gagal ({})", short_err(&e)));
-                return false;
-            }
+            Err(e) => return (Vec::new(), format!("web {host}: gagal ({})", short_err(&e))),
         };
         let status = resp.status().as_u16();
         if status != 200 {
-            diag.push(format!("web {host}: HTTP {status}"));
-            return false;
+            return (Vec::new(), format!("web {host}: HTTP {status}"));
         }
         let body: Value = match resp.json().await {
             Ok(v) => v,
-            Err(e) => {
-                diag.push(format!("web {host}: bukan JSON ({e})"));
-                return false;
-            }
+            Err(e) => return (Vec::new(), format!("web {host}: bukan JSON ({e})")),
         };
         let data = body.get("data").cloned().unwrap_or(Value::Null);
         let raw_streams = data
@@ -430,8 +468,7 @@ impl WebEngine {
                 .or_else(|| body.get("msg"))
                 .and_then(|m| m.as_str())
                 .unwrap_or("");
-            diag.push(format!("web {host}: kosong {msg}"));
-            return false;
+            return (Vec::new(), format!("web {host}: kosong {msg}"));
         }
 
         let web_headers = vec![
@@ -439,7 +476,7 @@ impl WebEngine {
             ("Referer".to_string(), format!("{domain}/")),
             ("Origin".to_string(), domain.to_string()),
         ];
-        let before = out.len();
+        let mut out = Vec::new();
         let mut notices = 0;
 
         for st in &raw_streams {
@@ -448,9 +485,6 @@ impl WebEngine {
             };
             if is_notice(url, as_u64(st.get("duration"))) {
                 notices += 1;
-                continue;
-            }
-            if !seen.insert(url.to_string()) {
                 continue;
             }
             let res = st
@@ -481,9 +515,6 @@ impl WebEngine {
             if final_url.is_empty() || is_notice(&final_url, None) {
                 continue;
             }
-            if !seen.insert(final_url.clone()) {
-                continue;
-            }
             let mut headers = web_headers.clone();
             if !cookie.is_empty() {
                 headers.push(("Cookie".to_string(), clean_cookie(cookie)));
@@ -500,13 +531,13 @@ impl WebEngine {
             ));
         }
 
-        let added = out.len() - before;
-        diag.push(format!(
-            "web {host}: {} mp4 + {} dash, {added} dipakai, {notices} notice",
+        let line = format!(
+            "web {host}: {} mp4 + {} dash, {} dipakai, {notices} notice",
             raw_streams.len(),
-            dash.len()
-        ));
-        added > 0
+            dash.len(),
+            out.len()
+        );
+        (out, line)
     }
 
     /// Port dari MovieBoxEngine.get_subtitles().

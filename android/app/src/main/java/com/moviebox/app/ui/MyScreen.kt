@@ -73,7 +73,7 @@ fun MyScreen(onOpen: (Title) -> Unit, onPlay: (Title) -> Unit, onDetails: (Title
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(list, key = { it.id }) { item ->
+                        items(list, key = { it.key }) { item ->
                             Poster(item, onClick = { onOpen(item) }, onLongClick = { onDetails(item) })
                         }
                     }

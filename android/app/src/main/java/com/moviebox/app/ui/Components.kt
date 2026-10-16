@@ -156,7 +156,7 @@ fun TitleRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            itemsIndexed(items, key = { _, it -> it.id }) { index, item ->
+            itemsIndexed(items, key = { _, it -> it.key }) { index, item ->
                 Poster(
                     item = item,
                     onClick = { onOpen(item) },
