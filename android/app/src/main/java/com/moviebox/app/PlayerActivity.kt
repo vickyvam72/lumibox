@@ -259,7 +259,7 @@ class PlayerActivity : ComponentActivity() {
             loadingMessage = "Memutar…"
             val captionsJob = async { loadCaptions(usedId) }
             val quick = withTimeoutOrNull(1_200L) { captionsJob.await() }
-            setCaptions(quick ?: emptyList())
+            applyCaptions(quick ?: emptyList())
             applyLanguagePreferences()
 
             val startAt = startAtMs ?: if (resume) resumePosition() else 0L
@@ -268,7 +268,7 @@ class PlayerActivity : ComponentActivity() {
             if (quick == null) {
                 val late = captionsJob.await()
                 if (late.isNotEmpty()) {
-                    setCaptions(late)
+                    applyCaptions(late)
                     applyLanguagePreferences()
                     // Pasang ulang sumber dengan subtitle di posisi yang sama.
                     playCurrent(player.currentPosition.coerceAtLeast(0L), keepState = true)
@@ -294,7 +294,7 @@ class PlayerActivity : ComponentActivity() {
         return emptyList()
     }
 
-    private fun setCaptions(list: List<Caption>) {
+    private fun applyCaptions(list: List<Caption>) {
         captions = list
         val counts = HashMap<String, Int>()
         captionLabels = list.associateWith { c ->
