@@ -62,10 +62,9 @@ object Repo {
                     episodes = s.optJSONArray("episodes").objects().map { it.optInt("number", 1) },
                 )
             }.filter { it.episodes.isNotEmpty() },
-            dubs = d.optJSONArray("dubs").objects().mapNotNull { dub ->
-                val sid = dub.str("subject_id") ?: return@mapNotNull null
-                Dub(sid, dub.str("label") ?: dub.str("language") ?: sid)
-            },
+            originalSubjectId = d.str("original_subject_id"),
+            originalLanguage = d.str("original_language"),
+            country = d.str("country"),
         )
     }
 
@@ -93,7 +92,7 @@ object Repo {
             if (resourceId.isNullOrBlank()) return@withContext emptyList()
             unwrapArray(Native.captions(id, resourceId, season, episode)).objects().mapNotNull { c ->
                 val url = c.str("url") ?: return@mapNotNull null
-                Caption(c.str("name") ?: "Subtitle", url)
+                Caption(c.str("name") ?: "Subtitle", url, c.str("code"))
             }
         }
 

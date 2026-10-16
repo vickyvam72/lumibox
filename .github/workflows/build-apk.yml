@@ -54,34 +54,46 @@ jobs:
 
       - name: Build APK
         working-directory: android
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon 2>&1 | tee build.log
+
+      - name: Laporkan error build
+        if: failure()
+        working-directory: android
+        run: |
+          if [ -f build.log ]; then
+            grep -E "^e: |error:|What went wrong|Unresolved|Type mismatch" -A2 build.log | head -60 | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          fi
 
       - name: Rename APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/release/app-release.apk dist/MovieBox.apk
+          cp android/app/build/outputs/apk/release/app-release.apk dist/LumiBox.apk
 
       - name: Upload APK (artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: MovieBox-APK
-          path: dist/MovieBox.apk
+          name: LumiBox-APK
+          path: dist/LumiBox.apk
 
       - name: Publish ke GitHub Release (tag v*)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/MovieBox.apk
+          files: dist/LumiBox.apk
 
       - name: Publish ke GitHub Release (setiap push ke main)
         if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: MovieBox build ${{ github.run_number }}
+          name: Lumi Box build ${{ github.run_number }}
           target_commitish: ${{ github.sha }}
           make_latest: "true"
           body: |
             APK otomatis dari commit ${{ github.sha }}.
-            Download **MovieBox.apk** di bawah, lalu install di HP Android (izinkan "sumber tidak dikenal").
-          files: dist/MovieBox.apk
+            Download **LumiBox.apk** di bawah, lalu install di HP Android (izinkan "sumber tidak dikenal").
+          files: dist/LumiBox.apk

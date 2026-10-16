@@ -1,8 +1,7 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
-
 package com.moviebox.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,11 +11,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -24,31 +23,21 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,28 +45,20 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
-import android.widget.Toast
-import com.moviebox.app.PlayerActivity
-import com.moviebox.app.data.BridgeException
 import com.moviebox.app.data.Details
+import com.moviebox.app.data.Library
 import com.moviebox.app.data.Repo
-import com.moviebox.app.data.Stream
 import kotlinx.coroutines.launch
 
-class DetailViewModel(initialId: String) : ViewModel() {
-    var currentId by mutableStateOf(initialId)
-        private set
+class DetailViewModel(private val subjectId: String) : ViewModel() {
     var details by mutableStateOf<Details?>(null)
         private set
     var loading by mutableStateOf(false)
@@ -87,19 +68,20 @@ class DetailViewModel(initialId: String) : ViewModel() {
     var selectedSeason by mutableIntStateOf(0)
 
     init {
-        load(initialId)
+        load()
     }
 
-    fun load(id: String = currentId) {
-        currentId = id
+    fun load() {
         loading = true
         error = null
         viewModelScope.launch {
             try {
-                val d = Repo.details(id)
+                val d = Repo.details(subjectId)
                 details = d
-                if (d.seasons.none { it.number == selectedSeason }) {
-                    selectedSeason = d.seasons.firstOrNull()?.number ?: 0
+                val watched = Library.entry(subjectId)
+                selectedSeason = when {
+                    watched != null && d.seasons.any { it.number == watched.season } -> watched.season
+                    else -> d.seasons.minByOrNull { it.number }?.number ?: 0
                 }
             } catch (e: Exception) {
                 error = e.message ?: "Gagal memuat detail"
@@ -110,71 +92,22 @@ class DetailViewModel(initialId: String) : ViewModel() {
     }
 }
 
-/** Status dialog pemilihan kualitas. */
-private data class Picker(
-    val season: Int,
-    val episode: Int,
-    val loading: Boolean = true,
-    val streams: List<Stream> = emptyList(),
-    val error: String? = null,
-    val debug: String? = null,
-)
-
+/**
+ * Halaman detail. [onPlay] dipanggil dengan (detail, season, episode);
+ * season/episode 0 berarti film.
+ */
 @Composable
-fun DetailScreen(subjectId: String, onBack: () -> Unit) {
+fun DetailScreen(
+    subjectId: String,
+    onBack: () -> Unit,
+    onPlay: (Details, Int, Int) -> Unit,
+) {
     val vm: DetailViewModel = viewModel(key = "detail-$subjectId") { DetailViewModel(subjectId) }
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var picker by remember { mutableStateOf<Picker?>(null) }
-    var preparing by remember { mutableStateOf(false) }
-
-    fun launchPlayer(stream: Stream, season: Int, episode: Int) {
-        val d = vm.details ?: return
-        picker = null
-        preparing = true
-        scope.launch {
-            val captions = try {
-                Repo.captions(vm.currentId, stream.resourceId, season, episode)
-            } catch (_: Exception) {
-                emptyList()
-            }
-            preparing = false
-            val label = if (season > 0) "${d.title} • S$season E$episode" else d.title
-            PlayerActivity.start(
-                context = context,
-                title = label,
-                resumeKey = "${vm.currentId}:$season:$episode",
-                stream = stream,
-                captions = captions,
-            )
-        }
-    }
-
-    fun requestPlay(season: Int, episode: Int) {
-        picker = Picker(season, episode)
-        scope.launch {
-            try {
-                val streams = Repo.streams(vm.currentId, season, episode)
-                    .distinctBy { it.label }
-                when {
-                    streams.isEmpty() -> picker = picker?.copy(loading = false, error = "Tidak ada sumber video.")
-                    streams.size == 1 -> launchPlayer(streams.first(), season, episode)
-                    else -> picker = picker?.copy(loading = false, streams = streams)
-                }
-            } catch (e: Exception) {
-                picker = picker?.copy(
-                    loading = false,
-                    error = e.message ?: "Gagal mengambil sumber video",
-                    debug = (e as? BridgeException)?.debug,
-                )
-            }
-        }
-    }
 
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(Background),
     ) {
         val d = vm.details
         when {
@@ -185,11 +118,7 @@ fun DetailScreen(subjectId: String, onBack: () -> Unit) {
                 modifier = Modifier.align(Alignment.Center),
             )
 
-            else -> DetailContent(
-                d = d,
-                vm = vm,
-                onPlay = { s, e -> requestPlay(s, e) },
-            )
+            else -> DetailContent(d, vm, onPlay)
         }
 
         IconButton(
@@ -198,309 +127,216 @@ fun DetailScreen(subjectId: String, onBack: () -> Unit) {
                 .statusBarsPadding()
                 .padding(8.dp)
                 .clip(CircleShape)
-                .background(Color.Black.copy(alpha = 0.45f)),
+                .background(Color.Black.copy(alpha = 0.5f)),
         ) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Kembali", tint = Color.White)
         }
-
-        if (preparing || (vm.loading && vm.details != null)) {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.5f))
-                    .clickable(enabled = true, onClick = {}),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator()
-            }
-        }
-    }
-
-    picker?.let { p ->
-        QualityDialog(
-            picker = p,
-            onPick = { launchPlayer(it, p.season, p.episode) },
-            onDismiss = { picker = null },
-        )
     }
 }
 
 @Composable
-private fun DetailContent(d: Details, vm: DetailViewModel, onPlay: (Int, Int) -> Unit) {
-    val bottomInset = WindowInsets.navigationBars.asPaddingValues()
+private fun DetailContent(d: Details, vm: DetailViewModel, onPlay: (Details, Int, Int) -> Unit) {
+    val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val watched = Library.entry(d.id)
+    val inList = Library.isInList(d.id)
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = bottomInset.calculateBottomPadding() + 24.dp),
+        contentPadding = PaddingValues(bottom = bottomInset + 24.dp),
     ) {
-        item { Header(d) }
+        item {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(0.82f),
+            ) {
+                AsyncImage(
+                    model = d.poster,
+                    contentDescription = d.title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .background(
+                            Brush.verticalGradient(
+                                0f to Color.Black.copy(alpha = 0.45f),
+                                0.35f to Color.Transparent,
+                                0.75f to Color.Black.copy(alpha = 0.55f),
+                                1f to Background,
+                            ),
+                        ),
+                )
+                Text(
+                    d.title,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .padding(horizontal = 16.dp),
+                    color = Color.White,
+                    fontWeight = FontWeight.Black,
+                    fontSize = 28.sp,
+                    lineHeight = 32.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
 
         item {
             Column(Modifier.padding(horizontal = 16.dp)) {
-                val canQuickPlay = !d.isSeries || d.seasons.isEmpty()
-                if (canQuickPlay) {
-                    Button(
-                        onClick = { if (d.isSeries) onPlay(1, 1) else onPlay(0, 0) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp),
-                    ) {
-                        Icon(Icons.Default.PlayArrow, contentDescription = null)
-                        Spacer(Modifier.width(6.dp))
-                        Text("Putar", fontWeight = FontWeight.Bold)
-                    }
-                    Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(8.dp))
+                val meta = listOfNotNull(
+                    d.year,
+                    d.rating?.let { "★ $it" },
+                    d.duration,
+                    if (d.isSeries) "${d.seasons.size.coerceAtLeast(1)} Season" else "Film",
+                ).joinToString("   ")
+                Text(meta, color = TextDim, fontSize = 14.sp)
+                if (d.genres.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(d.genres.joinToString(" • "), color = TextDim, fontSize = 13.sp)
                 }
+                Spacer(Modifier.height(14.dp))
 
-                if (d.dubs.size > 1) {
-                    Text("Bahasa audio", style = MaterialTheme.typography.labelLarge)
+                val (playSeason, playEpisode) = when {
+                    !d.isSeries -> 0 to 0
+                    watched != null && watched.season > 0 -> watched.season to watched.episode
+                    else -> d.firstEpisode()
+                }
+                val playText = when {
+                    d.isSeries && watched != null -> "Lanjutkan S$playSeason:E$playEpisode"
+                    d.isSeries -> "Putar S$playSeason:E$playEpisode"
+                    watched != null -> "Lanjutkan"
+                    else -> "Putar"
+                }
+                PlayButton(playText, onClick = { onPlay(d, playSeason, playEpisode) }, modifier = Modifier.fillMaxWidth())
+                if (watched != null) {
                     Spacer(Modifier.height(6.dp))
+                    ProgressLine(watched.progress)
                 }
-            }
-        }
+                Spacer(Modifier.height(8.dp))
+                GrayButton(
+                    text = if (inList) "Ada di Daftar Saya" else "Daftar Saya",
+                    icon = if (inList) Icons.Default.Check else Icons.Default.Add,
+                    onClick = { Library.toggleList(d.asTitle()) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
 
-        if (d.dubs.size > 1) {
-            item {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(d.dubs, key = { it.subjectId }) { dub ->
-                        FilterChip(
-                            selected = dub.subjectId == vm.currentId,
-                            onClick = { if (dub.subjectId != vm.currentId) vm.load(dub.subjectId) },
-                            label = { Text(dub.label) },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-            }
-        }
-
-        item {
-            Column(Modifier.padding(horizontal = 16.dp)) {
                 d.description?.let {
-                    Text(it, style = MaterialTheme.typography.bodyMedium)
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(14.dp))
+                    Text(it, color = Color.White, style = MaterialTheme.typography.bodyMedium)
                 }
                 d.stars?.let {
+                    Spacer(Modifier.height(10.dp))
                     Text(
                         "Pemeran: $it",
+                        color = TextDim,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    Spacer(Modifier.height(10.dp))
                 }
             }
         }
 
         if (d.isSeries && d.seasons.isNotEmpty()) {
             item {
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                Text(
-                    "Episode",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                )
-                if (d.seasons.size > 1) {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        items(d.seasons, key = { it.number }) { s ->
-                            FilterChip(
-                                selected = s.number == vm.selectedSeason,
-                                onClick = { vm.selectedSeason = s.number },
-                                label = { Text("Season ${s.number}") },
-                            )
+                Column {
+                    Spacer(Modifier.height(20.dp))
+                    Box(
+                        Modifier
+                            .padding(horizontal = 16.dp)
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(Surface2),
+                    )
+                    SectionTitle("Episode", Modifier.padding(top = 12.dp))
+                    if (d.seasons.size > 1) {
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            items(d.seasons.sortedBy { it.number }, key = { it.number }) { s ->
+                                val selected = s.number == vm.selectedSeason
+                                Text(
+                                    "Season ${s.number}",
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(if (selected) Color.White else Color.Transparent)
+                                        .border(1.dp, Color.White.copy(alpha = 0.5f), RoundedCornerShape(50))
+                                        .clickable { vm.selectedSeason = s.number }
+                                        .padding(horizontal = 16.dp, vertical = 7.dp),
+                                    color = if (selected) Color.Black else Color.White,
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
                         }
+                        Spacer(Modifier.height(8.dp))
                     }
-                    Spacer(Modifier.height(8.dp))
                 }
             }
 
             val season = d.seasons.firstOrNull { it.number == vm.selectedSeason } ?: d.seasons.first()
-            val rows = season.episodes.chunked(5)
-            items(rows.size, key = { "s${season.number}-r$it" }) { index ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    val row = rows[index]
-                    row.forEach { ep ->
-                        OutlinedButton(
-                            onClick = { onPlay(season.number, ep) },
-                            contentPadding = PaddingValues(0.dp),
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(42.dp),
-                        ) {
-                            Text("$ep")
-                        }
-                    }
-                    repeat(5 - row.size) { Spacer(Modifier.weight(1f)) }
-                }
+            items(season.episodes.sorted(), key = { "s${season.number}e$it" }) { ep ->
+                val isCurrent = watched != null && watched.season == season.number && watched.episode == ep
+                EpisodeRow(
+                    poster = d.poster,
+                    number = ep,
+                    isCurrent = isCurrent,
+                    progress = if (isCurrent) watched?.progress ?: 0f else 0f,
+                    onClick = { onPlay(d, season.number, ep) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun Header(d: Details) {
-    Box(
+private fun EpisodeRow(poster: String?, number: Int, isCurrent: Boolean, progress: Float, onClick: () -> Unit) {
+    Row(
         Modifier
             .fillMaxWidth()
-            .height(340.dp),
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        AsyncImage(
-            model = d.poster,
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(260.dp),
-        )
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(262.dp)
-                .background(
-                    Brush.verticalGradient(
-                        0f to Color.Black.copy(alpha = 0.35f),
-                        0.6f to Color.Transparent,
-                        1f to MaterialTheme.colorScheme.background,
-                    ),
-                ),
-        )
-        Row(
-            Modifier
-                .align(Alignment.BottomStart)
-                .padding(horizontal = 16.dp)
-                .offset(y = (-8).dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            AsyncImage(
-                model = d.poster,
-                contentDescription = d.title,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .width(110.dp)
-                    .height(165.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
-            )
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.padding(bottom = 4.dp)) {
-                Text(
-                    d.title,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
+        Column(Modifier.width(132.dp)) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(74.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Surface2),
+            ) {
+                AsyncImage(
+                    model = poster,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
                 )
-                Spacer(Modifier.height(4.dp))
-                val meta = listOfNotNull(
-                    d.year,
-                    d.rating?.let { "★ $it" },
-                    d.duration,
-                    if (d.isSeries) "Series" else "Film",
-                ).joinToString(" • ")
-                Text(meta, style = MaterialTheme.typography.labelMedium, color = Accent)
-                if (d.genres.isNotEmpty()) {
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        d.genres.joinToString(", "),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun QualityDialog(picker: Picker, onPick: (Stream) -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Text(if (picker.season > 0) "S${picker.season} E${picker.episode} — Pilih kualitas" else "Pilih kualitas")
-        },
-        text = {
-            when {
-                picker.loading -> Box(
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)))
+                Box(
                     Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
+                        .align(Alignment.Center)
+                        .size(34.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.5f))
+                        .border(1.dp, Color.White, CircleShape),
                     contentAlignment = Alignment.Center,
-                ) { CircularProgressIndicator(Modifier.size(32.dp)) }
-
-                picker.error != null -> ErrorDetails(picker.error, picker.debug)
-
-                else -> Column(Modifier.verticalScroll(rememberScrollState())) {
-                    picker.streams.forEach { s ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable { onPick(s) }
-                                .padding(horizontal = 8.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Accent)
-                            Spacer(Modifier.width(10.dp))
-                            Text(s.label, Modifier.weight(1f), fontWeight = FontWeight.Medium)
-                            formatSize(s.sizeBytes)?.let {
-                                Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Tutup") }
-        },
-    )
-}
-
-@Composable
-private fun ErrorDetails(error: String, debug: String?) {
-    val clipboard = LocalClipboardManager.current
-    val context = LocalContext.current
-    var showDebug by remember { mutableStateOf(false) }
-    Column(Modifier.verticalScroll(rememberScrollState())) {
-        Text(error)
-        if (debug != null) {
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { showDebug = !showDebug }) {
-                    Text(if (showDebug) "Sembunyikan info" else "Info teknis")
-                }
-                OutlinedButton(onClick = {
-                    clipboard.setText(AnnotatedString(debug))
-                    Toast.makeText(context, "Info teknis disalin", Toast.LENGTH_SHORT).show()
-                }) {
-                    Text("Salin")
-                }
-            }
-            if (showDebug) {
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    debug,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .padding(8.dp),
-                )
-            }
+            if (isCurrent) ProgressLine(progress)
         }
+        Spacer(Modifier.width(14.dp))
+        Text(
+            "Episode $number",
+            color = if (isCurrent) Accent else Color.White,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 15.sp,
+            modifier = Modifier.weight(1f),
+        )
     }
 }

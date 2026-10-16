@@ -17,6 +17,7 @@ use moviebox_tui::providers::models::{CatalogItem, ProviderKind};
 use moviebox_tui::providers::moviebox::adapt;
 use moviebox_tui::service::MovieBoxService;
 
+mod lang;
 mod web;
 
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
@@ -106,11 +107,13 @@ pub fn homepage_sections(payload: &Value) -> Vec<Value> {
     if let Some(groups) = groups {
         for (index, group) in groups.iter().enumerate() {
             let is_banner = group.get("banner").is_some();
-            let items: Vec<CatalogItem> = group_subjects(group)
-                .into_iter()
-                .filter_map(adapt::moviebox_subject_json_to_catalog_item)
-                .filter(|item| seen.insert(item.id.value.clone()))
-                .collect();
+            let items: Vec<CatalogItem> = lang::tidy_items(
+                group_subjects(group)
+                    .into_iter()
+                    .filter_map(adapt::moviebox_subject_json_to_catalog_item)
+                    .filter(|item| seen.insert(item.id.value.clone()))
+                    .collect(),
+            );
             if items.is_empty() {
                 continue;
             }
@@ -138,6 +141,7 @@ pub fn homepage(tab_id: &str, page: usize) -> String {
                 let mut sections = homepage_sections(&payload);
                 if sections.is_empty() {
                     let (items, _) = adapt::moviebox_homepage_json_to_catalog(&payload);
+                    let items = lang::tidy_items(items);
                     if !items.is_empty() {
                         sections.push(json!({
                             "title": "Populer",
@@ -159,7 +163,7 @@ pub fn search(query: &str, page: usize) -> String {
             .search_typed(ProviderKind::MovieBox, query, page.max(1))
             .await
         {
-            Ok(items) => ok(json!(items)),
+            Ok(items) => ok(json!(lang::tidy_items(items))),
             Err(e) => err(e.user_message(ProviderKind::MovieBox)),
         }
     })
@@ -167,11 +171,30 @@ pub fn search(query: &str, page: usize) -> String {
 
 pub fn details(subject_id: &str) -> String {
     RUNTIME.block_on(async {
-        match SERVICE
-            .details_typed(ProviderKind::MovieBox, subject_id)
-            .await
-        {
-            Ok(details) => ok(json!(details)),
+        let raw = match SERVICE.client.get_details(subject_id).await {
+            Ok(raw) => raw,
+            Err(e) => {
+                return err(moviebox_tui::providers::models::ProviderError::from(e)
+                    .user_message(ProviderKind::MovieBox));
+            }
+        };
+        match adapt::moviebox_details_json_to_media_details(&raw) {
+            Ok(mut details) => {
+                let info = lang::original_info(&raw, &details);
+                let clean = moviebox_tui::providers::moviebox::clean_moviebox_title(&details.title)
+                    .trim()
+                    .to_string();
+                if !clean.is_empty() {
+                    details.title = clean;
+                }
+                let mut value = json!(details);
+                if let Some(obj) = value.as_object_mut() {
+                    obj.insert("original_subject_id".into(), json!(info.subject_id));
+                    obj.insert("original_language".into(), json!(info.language));
+                    obj.insert("country".into(), json!(info.country));
+                }
+                ok(value)
+            }
             Err(e) => err(e.user_message(ProviderKind::MovieBox)),
         }
     })

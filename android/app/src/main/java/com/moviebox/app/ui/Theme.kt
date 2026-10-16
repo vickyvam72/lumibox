@@ -5,28 +5,33 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
+/** Warna khas Lumi Box: kuning-amber "cahaya". */
 val Accent = Color(0xFFFFB020)
-private val Background = Color(0xFF0E0F13)
-private val Surface = Color(0xFF16171D)
-private val SurfaceHigh = Color(0xFF22232B)
+val AccentDeep = Color(0xFFFF7A00)
+val Background = Color(0xFF000000)
+val Surface1 = Color(0xFF141414)
+val Surface2 = Color(0xFF232323)
+val TextDim = Color(0xFFB3B3B3)
 
 private val colors = darkColorScheme(
     primary = Accent,
-    onPrimary = Color(0xFF1A1200),
-    secondary = Color(0xFF8AB4F8),
+    onPrimary = Color.Black,
+    secondary = Color.White,
     background = Background,
-    onBackground = Color(0xFFECECF1),
+    onBackground = Color.White,
     surface = Background,
-    onSurface = Color(0xFFECECF1),
-    surfaceVariant = SurfaceHigh,
-    onSurfaceVariant = Color(0xFFA3A4AE),
-    surfaceContainer = Surface,
-    surfaceContainerHigh = SurfaceHigh,
-    secondaryContainer = SurfaceHigh,
-    onSecondaryContainer = Color(0xFFECECF1),
+    onSurface = Color.White,
+    surfaceVariant = Surface2,
+    onSurfaceVariant = TextDim,
+    surfaceContainer = Surface1,
+    surfaceContainerHigh = Surface2,
+    surfaceContainerHighest = Surface2,
+    secondaryContainer = Surface2,
+    onSecondaryContainer = Color.White,
+    outline = Color(0xFF5A5A5A),
 )
 
 @Composable
-fun MovieBoxTheme(content: @Composable () -> Unit) {
+fun LumiTheme(content: @Composable () -> Unit) {
     MaterialTheme(colorScheme = colors, content = content)
 }

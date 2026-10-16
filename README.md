@@ -1,4 +1,4 @@
-# MovieBox Android
+# Lumi Box (Android)
 
 Versi aplikasi Android dari `moviebox-tui`. Begitu dibuka, aplikasi **langsung menampilkan daftar film/series** dari beranda MovieBox (tanpa harus mencari dulu). Pencarian tetap tersedia lewat ikon 🔍.
 

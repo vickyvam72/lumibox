@@ -546,7 +546,12 @@ impl WebEngine {
                     .or_else(|| item.get("language"))
                     .and_then(|n| n.as_str())
                     .unwrap_or("Subtitle");
-                out.push(json!({ "name": name, "url": url }));
+                let code = item
+                    .get("lan")
+                    .or_else(|| item.get("lanCode"))
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("");
+                out.push(json!({ "name": name, "url": url, "code": code }));
             }
         }
         out
