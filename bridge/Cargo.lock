@@ -1486,6 +1486,7 @@ version = "0.1.0"
 dependencies = [
  "jni",
  "moviebox-tui",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

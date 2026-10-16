@@ -17,6 +17,8 @@ use moviebox_tui::providers::models::{CatalogItem, ProviderKind};
 use moviebox_tui::providers::moviebox::adapt;
 use moviebox_tui::service::MovieBoxService;
 
+mod web;
+
 static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
@@ -238,11 +240,22 @@ pub fn streams(subject_id: &str, season: usize, episode: usize) -> String {
             client.get_resources(subject_id, season, episode, page, None, 20),
         );
 
-        let mut releases = Vec::new();
-        let mut seen = HashSet::new();
         let mut diag = vec![format!(
             "subjectId={subject_id} season={season} episode={episode}"
         )];
+
+        // 1) Jalur baru (port dari Moviebox-API): web H5 + identitas app terbaru.
+        let fresh = web::ENGINE
+            .streams(subject_id, season, episode, &mut diag)
+            .await;
+
+        let mut releases = Vec::new();
+        let mut seen: HashSet<String> = fresh
+            .iter()
+            .filter_map(|v| v.get("url").and_then(|u| u.as_str()))
+            .map(|u| u.split('?').next().unwrap_or(u).to_string())
+            .collect();
+        diag.push("--- jalur lama (core) ---".to_string());
 
         match &play_info {
             Ok(json) => {
@@ -291,7 +304,7 @@ pub fn streams(subject_id: &str, season: usize, episode: usize) -> String {
             Err(e) => diag.push(format!("resource GAGAL: {e}")),
         }
 
-        if releases.is_empty() {
+        if releases.is_empty() && fresh.is_empty() {
             let raw = |r: &Result<Value, _>| match r {
                 Ok(v) => truncate(&v.to_string(), 2500),
                 Err(_) => "-".to_string(),
@@ -312,7 +325,8 @@ pub fn streams(subject_id: &str, season: usize, episode: usize) -> String {
                 .then_with(|| b.size_bytes.cmp(&a.size_bytes))
         });
 
-        let list: Vec<Value> = releases
+        let mut list: Vec<Value> = fresh;
+        list.extend(releases
             .iter()
             .filter_map(|rel| {
                 let mirror = rel.mirrors.first()?;
@@ -331,21 +345,23 @@ pub fn streams(subject_id: &str, season: usize, episode: usize) -> String {
                     "headers": mirror.headers,
                     "resourceId": rel.resource_id,
                 }))
-            })
-            .collect();
+            }));
+        list.sort_by_key(|v| std::cmp::Reverse(v.get("height").and_then(|h| h.as_u64()).unwrap_or(0)));
         ok(json!(list))
     })
 }
 
 pub fn captions(subject_id: &str, resource_id: &str, season: usize, episode: usize) -> String {
     RUNTIME.block_on(async {
-        match SERVICE
+        let mut list: Vec<Value> = SERVICE
             .get_ext_captions(subject_id, resource_id, &[], season, episode)
             .await
-        {
-            Ok(list) => ok(json!(list)),
-            Err(e) => err(e),
+            .map(|l| l.into_iter().map(|c| json!(c)).collect())
+            .unwrap_or_default();
+        if list.is_empty() {
+            list = web::ENGINE.captions(subject_id, resource_id, episode).await;
         }
+        ok(json!(list))
     })
 }
 

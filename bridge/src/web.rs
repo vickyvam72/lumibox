@@ -1,0 +1,633 @@
+//! Jalur stream "baru", porting dari Moviebox-API (api.py → MovieBoxEngine).
+//!
+//! Kenapa perlu: identitas klien di core (`com.community.oneroom` 4.0.01) sekarang
+//! dianggap usang oleh server, sehingga play-info/resource hanya mengembalikan video
+//! "notice" 23 detik. Di sini dipakai identitas `com.community.mbox.in` 4.0.03 dan
+//! endpoint web `wefeed-h5api-bff/subject/play`, sama seperti api.py.
+
+use std::collections::HashSet;
+use std::sync::LazyLock;
+use std::time::Duration;
+
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use serde_json::{Value, json};
+use tokio::sync::Mutex;
+
+use moviebox_tui::providers::moviebox::{adapt, crypto};
+
+const MODERN_USER_AGENT: &str = "com.community.mbox.in/50020130 (Linux; U; Android 14; en_IN; Pixel 8; Build/UD1A.230803.041; Cronet/145.0.7582.0)";
+const WEB_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/154.0.0.0 Mobile Safari/537.36";
+const NATIVE_API_BASE: &str = "https://api3.aoneroom.com";
+const BOOTSTRAP_URL: &str = "https://apig.inmoviebox.com/wefeed-mobile-bff/tab/ranking-list?tabId=0&categoryType=4516404531735022304&page=1&perPage=1";
+
+const WEB_DOMAINS: &[&str] = &[
+    "https://123moviesfree.club",
+    "https://movie-box.co",
+    "https://movieboxonline.net",
+    "https://sflix.film",
+    "https://h5-api.aoneroom.com",
+    "https://netnaija.film",
+    "https://movieboxhd.net",
+];
+
+pub struct WebEngine {
+    http: reqwest::Client,
+    client_info: String,
+    token: Mutex<Option<String>>,
+}
+
+pub static ENGINE: LazyLock<WebEngine> = LazyLock::new(WebEngine::new);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn put(headers: &mut HeaderMap, name: &'static str, value: &str) {
+    if let Ok(v) = HeaderValue::from_str(value) {
+        headers.insert(HeaderName::from_static(name), v);
+    }
+}
+
+fn as_id(v: Option<&Value>) -> Option<String> {
+    let v = v?;
+    v.as_str()
+        .map(str::to_string)
+        .or_else(|| v.as_i64().map(|n| n.to_string()))
+        .or_else(|| v.as_u64().map(|n| n.to_string()))
+        .filter(|s| !s.is_empty())
+}
+
+fn as_u64(v: Option<&Value>) -> Option<u64> {
+    let v = v?;
+    v.as_u64()
+        .or_else(|| v.as_i64().map(|n| n.max(0) as u64))
+        .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+}
+
+/// Resolusi tertinggi yang disebut di string seperti "1080,720,480".
+fn best_height(resolutions: &str) -> u64 {
+    resolutions
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|s| s.parse::<u64>().ok())
+        .filter(|h| (144..=4320).contains(h))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Video "notice" (pesan update aplikasi) — bukan film sungguhan.
+fn is_notice(url: &str, duration: Option<u64>) -> bool {
+    adapt::is_deprecation_notice_url(url) || duration.is_some_and(|d| d > 0 && d < 90)
+}
+
+/// Sama dengan extract_policy_resource() di api.py.
+fn mpd_from_sign_cookie(cookie: &str) -> Option<String> {
+    adapt::resolve_dash_manifest_from_policy(cookie)
+}
+
+fn clean_cookie(cookie: &str) -> String {
+    cookie
+        .trim_end_matches(';')
+        .split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+impl WebEngine {
+    fn new() -> Self {
+        let http = moviebox_tui::net::http_client_builder()
+            .timeout(Duration::from_secs(25))
+            .build()
+            .unwrap_or_default();
+        let device_id = moviebox_tui::cache::md5_hex(&format!(
+            "{}-{}",
+            now_ms(),
+            std::process::id()
+        ));
+        let client_info = json!({
+            "package_name": "com.community.mbox.in",
+            "version_name": "4.0.03.0920.03",
+            "version_code": 50020130,
+            "os": "android",
+            "os_version": "14",
+            "device_id": device_id,
+            "install_store": "official",
+            "gaid": "1b2212c1-dadf-43c3-a0c8-bd6ce48ae22d",
+            "brand": "Google",
+            "model": "Pixel 8",
+            "system_language": "en",
+            "net": "NETWORK_WIFI",
+            "region": "IN",
+            "timezone": "Asia/Calcutta",
+            "sp_code": "",
+        })
+        .to_string();
+        Self {
+            http,
+            client_info,
+            token: Mutex::new(None),
+        }
+    }
+
+    fn native_headers(
+        &self,
+        method: &str,
+        url: &str,
+        body: Option<&str>,
+        token: Option<&str>,
+    ) -> HeaderMap {
+        let ts = now_ms();
+        let accept = "application/json";
+        let content_type = "application/json";
+        let mut h = HeaderMap::new();
+        put(&mut h, "user-agent", MODERN_USER_AGENT);
+        put(&mut h, "accept", accept);
+        put(&mut h, "content-type", content_type);
+        put(&mut h, "connection", "keep-alive");
+        put(&mut h, "x-client-token", &crypto::generate_x_client_token(ts));
+        put(
+            &mut h,
+            "x-tr-signature",
+            &crypto::generate_x_tr_signature(
+                method,
+                Some(accept),
+                Some(content_type),
+                url,
+                body,
+                ts,
+            ),
+        );
+        put(&mut h, "x-client-info", &self.client_info);
+        put(&mut h, "x-client-status", "0");
+        if let Some(t) = token {
+            put(&mut h, "authorization", &format!("Bearer {t}"));
+        }
+        h
+    }
+
+    async fn token(&self, force: bool) -> Result<String, String> {
+        let mut guard = self.token.lock().await;
+        if !force {
+            if let Some(t) = guard.as_ref() {
+                return Ok(t.clone());
+            }
+        }
+        let resp = self
+            .http
+            .get(BOOTSTRAP_URL)
+            .headers(self.native_headers("GET", BOOTSTRAP_URL, None, None))
+            .timeout(Duration::from_secs(20))
+            .send()
+            .await
+            .map_err(|e| format!("bootstrap gagal: {e}"))?;
+        let status = resp.status().as_u16();
+        let x_user = resp
+            .headers()
+            .get("x-user")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| format!("bootstrap: header x-user tidak ada (HTTP {status})"))?;
+        let parsed: Value =
+            serde_json::from_str(x_user).map_err(|e| format!("bootstrap: x-user rusak: {e}"))?;
+        let token = parsed
+            .get("token")
+            .and_then(|t| t.as_str())
+            .filter(|t| !t.is_empty())
+            .ok_or("bootstrap: token kosong")?
+            .to_string();
+        *guard = Some(token.clone());
+        Ok(token)
+    }
+
+    /// GET ke API native (api3.aoneroom.com) dengan identitas baru. Mengembalikan body penuh.
+    async fn native_get(&self, path: &str) -> Result<Value, String> {
+        let url = format!("{NATIVE_API_BASE}{path}");
+        for attempt in 0..2 {
+            let token = self.token(attempt > 0).await?;
+            let resp = self
+                .http
+                .get(&url)
+                .headers(self.native_headers("GET", &url, None, Some(&token)))
+                .send()
+                .await
+                .map_err(|e| format!("request gagal: {e}"))?;
+            let status = resp.status().as_u16();
+            if (status == 401 || status == 441) && attempt == 0 {
+                continue;
+            }
+            if status != 200 {
+                return Err(format!("HTTP {status}"));
+            }
+            return resp.json::<Value>().await.map_err(|e| format!("JSON: {e}"));
+        }
+        Err("token ditolak".to_string())
+    }
+
+    async fn detail_path(&self, subject_id: &str) -> Result<String, String> {
+        let body = self
+            .native_get(&format!(
+                "/wefeed-mobile-bff/subject-api/get?subjectId={subject_id}"
+            ))
+            .await?;
+        let data = body.get("data").unwrap_or(&body);
+        let detail_url = data
+            .get("detailUrl")
+            .or_else(|| data.get("subject").and_then(|s| s.get("detailUrl")))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let path = detail_url.rsplit('/').next().unwrap_or(detail_url);
+        if path.is_empty() {
+            let alt = data
+                .get("detailPath")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            return Ok(alt.to_string());
+        }
+        Ok(path.to_string())
+    }
+
+    /// Port dari MovieBoxEngine.get_streams(): web H5 API dulu, lalu play-info native.
+    pub async fn streams(
+        &self,
+        subject_id: &str,
+        season: usize,
+        episode: usize,
+        diag: &mut Vec<String>,
+    ) -> Vec<Value> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+
+        let detail_path = match self.detail_path(subject_id).await {
+            Ok(p) => {
+                diag.push(format!("web: detailPath='{p}'"));
+                p
+            }
+            Err(e) => {
+                diag.push(format!("web: detailPath gagal: {e}"));
+                String::new()
+            }
+        };
+
+        match self.token(false).await {
+            Ok(token) => {
+                for domain in WEB_DOMAINS {
+                    let found = self
+                        .web_play(
+                            domain,
+                            &token,
+                            subject_id,
+                            season,
+                            episode,
+                            &detail_path,
+                            &mut seen,
+                            &mut out,
+                            diag,
+                        )
+                        .await;
+                    if found {
+                        break;
+                    }
+                }
+            }
+            Err(e) => diag.push(format!("web: {e}")),
+        }
+
+        match self
+            .native_get(&format!(
+                "/wefeed-mobile-bff/subject-api/play-info?subjectId={subject_id}&se={season}&ep={episode}"
+            ))
+            .await
+        {
+            Ok(body) => {
+                let data = body.get("data").unwrap_or(&body);
+                let streams = data
+                    .get("streams")
+                    .and_then(|s| s.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                let mut added = 0;
+                for st in &streams {
+                    let raw_url = st.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                    let duration = as_u64(st.get("duration"));
+                    let cookie = st.get("signCookie").and_then(|c| c.as_str()).unwrap_or("");
+                    let policy = if cookie.is_empty() {
+                        None
+                    } else {
+                        mpd_from_sign_cookie(cookie)
+                    };
+                    if policy.is_none() && (raw_url.is_empty() || is_notice(raw_url, duration)) {
+                        continue;
+                    }
+                    let url = policy.unwrap_or_else(|| raw_url.to_string());
+                    if !seen.insert(url.clone()) {
+                        continue;
+                    }
+                    let res = st.get("resolutions").and_then(|r| r.as_str()).unwrap_or("");
+                    let mut headers = vec![
+                        ("User-Agent".to_string(), MODERN_USER_AGENT.to_string()),
+                        ("Referer".to_string(), "https://api3.aoneroom.com/".to_string()),
+                    ];
+                    if !cookie.is_empty() {
+                        headers.push(("Cookie".to_string(), clean_cookie(cookie)));
+                    }
+                    out.push(stream_json(
+                        "App",
+                        st.get("format").and_then(|f| f.as_str()).unwrap_or("MP4"),
+                        best_height(res),
+                        st.get("codecName").and_then(|c| c.as_str()),
+                        as_u64(st.get("size")),
+                        &url,
+                        headers,
+                        as_id(st.get("id")),
+                    ));
+                    added += 1;
+                }
+                diag.push(format!(
+                    "native baru: {} stream, {added} bisa dipakai",
+                    streams.len()
+                ));
+            }
+            Err(e) => diag.push(format!("native baru GAGAL: {e}")),
+        }
+
+        out
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn web_play(
+        &self,
+        domain: &str,
+        token: &str,
+        subject_id: &str,
+        season: usize,
+        episode: usize,
+        detail_path: &str,
+        seen: &mut HashSet<String>,
+        out: &mut Vec<Value>,
+        diag: &mut Vec<String>,
+    ) -> bool {
+        let play_url = format!(
+            "{domain}/wefeed-h5api-bff/subject/play?subjectId={subject_id}&se={season}&ep={episode}&detailPath={detail_path}&streamSignType=1&supportCodecs%5Bhevc%5D=1&supportCodecs%5Bh264%5D=1"
+        );
+        let referer = format!(
+            "{domain}/movies/{detail_path}?id={subject_id}&type=/movie/detail&detailSe=&detailEp=&lang=en"
+        );
+        let mut h = HeaderMap::new();
+        put(&mut h, "user-agent", WEB_USER_AGENT);
+        put(&mut h, "referer", &referer);
+        put(&mut h, "accept", "application/json");
+        put(&mut h, "x-client-info", r#"{"timezone":"Asia/Calcutta"}"#);
+        put(&mut h, "x-request-lang", "en");
+        put(&mut h, "x-vip-restrict", "0");
+        put(&mut h, "x-no-high-risk-restrict", "0");
+        put(&mut h, "x-source", "moviebox");
+        put(&mut h, "authorization", &format!("Bearer {token}"));
+
+        let host = domain.trim_start_matches("https://");
+        let resp = match self
+            .http
+            .get(&play_url)
+            .headers(h)
+            .timeout(Duration::from_secs(12))
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                diag.push(format!("web {host}: gagal ({})", short_err(&e)));
+                return false;
+            }
+        };
+        let status = resp.status().as_u16();
+        if status != 200 {
+            diag.push(format!("web {host}: HTTP {status}"));
+            return false;
+        }
+        let body: Value = match resp.json().await {
+            Ok(v) => v,
+            Err(e) => {
+                diag.push(format!("web {host}: bukan JSON ({e})"));
+                return false;
+            }
+        };
+        let data = body.get("data").cloned().unwrap_or(Value::Null);
+        let raw_streams = data
+            .get("streams")
+            .and_then(|s| s.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let dash = data
+            .get("dash")
+            .and_then(|s| s.as_array())
+            .cloned()
+            .unwrap_or_default();
+        if raw_streams.is_empty() && dash.is_empty() {
+            let msg = body
+                .get("message")
+                .or_else(|| body.get("msg"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("");
+            diag.push(format!("web {host}: kosong {msg}"));
+            return false;
+        }
+
+        let web_headers = vec![
+            ("User-Agent".to_string(), "Mozilla/5.0".to_string()),
+            ("Referer".to_string(), format!("{domain}/")),
+            ("Origin".to_string(), domain.to_string()),
+        ];
+        let before = out.len();
+        let mut notices = 0;
+
+        for st in &raw_streams {
+            let Some(url) = st.get("url").and_then(|u| u.as_str()).filter(|u| !u.is_empty()) else {
+                continue;
+            };
+            if is_notice(url, as_u64(st.get("duration"))) {
+                notices += 1;
+                continue;
+            }
+            if !seen.insert(url.to_string()) {
+                continue;
+            }
+            let res = st
+                .get("resolutions")
+                .map(|r| r.as_str().map(str::to_string).unwrap_or_else(|| r.to_string()))
+                .unwrap_or_default();
+            out.push(stream_json(
+                "Web",
+                st.get("format").and_then(|f| f.as_str()).unwrap_or("MP4"),
+                best_height(&res),
+                st.get("codecName").and_then(|c| c.as_str()),
+                as_u64(st.get("size")),
+                url,
+                web_headers.clone(),
+                as_id(st.get("id")),
+            ));
+        }
+
+        for d in &dash {
+            let url = d.get("url").and_then(|u| u.as_str()).unwrap_or("");
+            let cookie = d.get("signCookie").and_then(|c| c.as_str()).unwrap_or("");
+            let final_url = if cookie.is_empty() {
+                None
+            } else {
+                mpd_from_sign_cookie(cookie)
+            }
+            .unwrap_or_else(|| url.to_string());
+            if final_url.is_empty() || is_notice(&final_url, None) {
+                continue;
+            }
+            if !seen.insert(final_url.clone()) {
+                continue;
+            }
+            let mut headers = web_headers.clone();
+            if !cookie.is_empty() {
+                headers.push(("Cookie".to_string(), clean_cookie(cookie)));
+            }
+            out.push(stream_json(
+                "Web",
+                "DASH",
+                0,
+                d.get("codecName").and_then(|c| c.as_str()),
+                None,
+                &final_url,
+                headers,
+                as_id(d.get("id")),
+            ));
+        }
+
+        let added = out.len() - before;
+        diag.push(format!(
+            "web {host}: {} mp4 + {} dash, {added} dipakai, {notices} notice",
+            raw_streams.len(),
+            dash.len()
+        ));
+        added > 0
+    }
+
+    /// Port dari MovieBoxEngine.get_subtitles().
+    pub async fn captions(&self, subject_id: &str, stream_id: &str, episode: usize) -> Vec<Value> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        let paths = [
+            format!(
+                "/wefeed-mobile-bff/subject-api/get-stream-captions?subjectId={subject_id}&streamId={stream_id}"
+            ),
+            format!(
+                "/wefeed-mobile-bff/subject-api/get-ext-captions?subjectId={subject_id}&resourceId={stream_id}&episode={episode}"
+            ),
+        ];
+        for path in paths {
+            let Ok(body) = self.native_get(&path).await else {
+                continue;
+            };
+            let data = body.get("data").cloned().unwrap_or(Value::Null);
+            let list = if data.is_array() {
+                data
+            } else {
+                data.get("extCaptions")
+                    .or_else(|| data.get("captions"))
+                    .cloned()
+                    .unwrap_or(Value::Null)
+            };
+            for item in list.as_array().into_iter().flatten() {
+                let Some(url) = item.get("url").and_then(|u| u.as_str()) else {
+                    continue;
+                };
+                if !seen.insert(url.to_string()) {
+                    continue;
+                }
+                let name = item
+                    .get("lanName")
+                    .or_else(|| item.get("language"))
+                    .and_then(|n| n.as_str())
+                    .unwrap_or("Subtitle");
+                out.push(json!({ "name": name, "url": url }));
+            }
+        }
+        out
+    }
+}
+
+fn short_err(e: &reqwest::Error) -> &'static str {
+    if e.is_timeout() {
+        "timeout"
+    } else if e.is_connect() {
+        "tidak bisa konek"
+    } else {
+        "error jaringan"
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn stream_json(
+    source: &str,
+    format: &str,
+    height: u64,
+    codec: Option<&str>,
+    size: Option<u64>,
+    url: &str,
+    headers: Vec<(String, String)>,
+    resource_id: Option<String>,
+) -> Value {
+    let quality = if height > 0 {
+        format!("{height}p")
+    } else {
+        "Auto".to_string()
+    };
+    let label = match codec {
+        Some(c) if !c.is_empty() => format!("{quality} {format} {c} • {source}"),
+        _ => format!("{quality} {format} • {source}"),
+    };
+    json!({
+        "label": label,
+        "quality": quality,
+        "height": height,
+        "codec": codec,
+        "sizeBytes": size,
+        "url": url,
+        "headers": headers,
+        "resourceId": resource_id,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn height_and_notice_detection() {
+        assert_eq!(best_height("1080,720,480"), 1080);
+        assert_eq!(best_height("720"), 720);
+        assert_eq!(best_height(""), 0);
+        assert!(is_notice(
+            "https://macdn.aoneroom.com/other/2026/10/10/80da52722ee7de7a4303290af6783424.mp4",
+            Some(23)
+        ));
+        assert!(is_notice("https://cdn.example/x.mp4", Some(23)));
+        assert!(!is_notice("https://cdn.example/x.mp4", Some(7128)));
+        assert!(!is_notice("https://cdn.example/x.mp4", None));
+    }
+
+    #[test]
+    fn stream_json_shape() {
+        let v = stream_json(
+            "Web",
+            "MP4",
+            720,
+            Some("h264"),
+            Some(10),
+            "https://x/y.mp4",
+            vec![("Referer".into(), "https://a/".into())],
+            Some("9".into()),
+        );
+        assert_eq!(v["quality"], "720p");
+        assert_eq!(v["height"], 720);
+        assert_eq!(v["headers"][0][0], "Referer");
+        assert_eq!(v["resourceId"], "9");
+    }
+}
