@@ -67,8 +67,21 @@ jobs:
           name: MovieBox-APK
           path: dist/MovieBox.apk
 
-      - name: Publish ke GitHub Release (kalau push tag v*)
+      - name: Publish ke GitHub Release (tag v*)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          files: dist/MovieBox.apk
+
+      - name: Publish ke GitHub Release (setiap push ke main)
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: MovieBox build ${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          make_latest: "true"
+          body: |
+            APK otomatis dari commit ${{ github.sha }}.
+            Download **MovieBox.apk** di bawah, lalu install di HP Android (izinkan "sumber tidak dikenal").
           files: dist/MovieBox.apk
