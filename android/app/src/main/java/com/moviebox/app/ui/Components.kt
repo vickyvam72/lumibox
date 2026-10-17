@@ -53,21 +53,29 @@ import coil.compose.AsyncImage
 import com.moviebox.app.data.HistoryEntry
 import com.moviebox.app.data.Title
 
-/** Logo Lumi Box: kotak amber dengan huruf "L". */
+/** Logo Lumi Box: kotak gradasi biru muda dengan huruf "L" dan kilau. */
 @Composable
 fun LumiLogo(size: Dp = 34.dp) {
     Box(
         Modifier
             .size(size)
             .clip(RoundedCornerShape(size / 4))
-            .background(Brush.linearGradient(listOf(Accent, AccentDeep))),
+            .background(Brush.linearGradient(listOf(AccentLight, AccentDeep))),
         contentAlignment = Alignment.Center,
     ) {
         Text(
             "L",
-            color = Color.Black,
+            color = Color.White,
             fontWeight = FontWeight.Black,
-            fontSize = (size.value * 0.62f).sp,
+            fontSize = (size.value * 0.6f).sp,
+        )
+        Text(
+            "✦",
+            color = Color.White,
+            fontSize = (size.value * 0.28f).sp,
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(end = size / 9, top = size / 18),
         )
     }
 }
@@ -103,7 +111,7 @@ fun Poster(
             overflow = TextOverflow.Ellipsis,
         )
         AsyncImage(
-            model = item.poster,
+            model = rememberPoster(item),
             contentDescription = item.title,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -136,8 +144,8 @@ fun Top10Badge(modifier: Modifier = Modifier) {
             .padding(horizontal = 4.dp, vertical = 2.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("TOP", color = Color.Black, fontSize = 7.sp, fontWeight = FontWeight.Bold, lineHeight = 8.sp)
-        Text("10", color = Color.Black, fontSize = 12.sp, fontWeight = FontWeight.Black, lineHeight = 12.sp)
+        Text("TOP", color = Color(0xFF00172E), fontSize = 7.sp, fontWeight = FontWeight.Bold, lineHeight = 8.sp)
+        Text("10", color = Color(0xFF00172E), fontSize = 12.sp, fontWeight = FontWeight.Black, lineHeight = 12.sp)
     }
 }
 

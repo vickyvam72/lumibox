@@ -399,6 +399,7 @@ impl WebEngine {
                 &url,
                 headers,
                 as_id(st.get("id")),
+                duration,
             ));
         }
         let line = format!("native baru: {} stream, {} bisa dipakai", streams.len(), out.len());
@@ -500,6 +501,7 @@ impl WebEngine {
                 url,
                 web_headers.clone(),
                 as_id(st.get("id")),
+                as_u64(st.get("duration")),
             ));
         }
 
@@ -528,6 +530,7 @@ impl WebEngine {
                 &final_url,
                 headers,
                 as_id(d.get("id")),
+                as_u64(d.get("duration")),
             ));
         }
 
@@ -609,6 +612,7 @@ fn stream_json(
     url: &str,
     headers: Vec<(String, String)>,
     resource_id: Option<String>,
+    duration: Option<u64>,
 ) -> Value {
     let quality = if height > 0 {
         format!("{height}p")
@@ -628,6 +632,7 @@ fn stream_json(
         "url": url,
         "headers": headers,
         "resourceId": resource_id,
+        "durationSec": duration,
     })
 }
 
@@ -660,10 +665,12 @@ mod tests {
             "https://x/y.mp4",
             vec![("Referer".into(), "https://a/".into())],
             Some("9".into()),
+            Some(7128),
         );
         assert_eq!(v["quality"], "720p");
         assert_eq!(v["height"], 720);
         assert_eq!(v["headers"][0][0], "Referer");
         assert_eq!(v["resourceId"], "9");
+        assert_eq!(v["durationSec"], 7128);
     }
 }

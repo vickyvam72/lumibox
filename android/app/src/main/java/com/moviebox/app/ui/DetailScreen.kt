@@ -148,6 +148,7 @@ fun DetailScreen(
     val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val watched = d?.let { Library.entry(it.id) }
     val inList = Library.isInList(t.key)
+    val info = mergeInfo(t, rememberTmdb(t.copy(title = t.title.ifBlank { d?.title ?: "" }, year = t.year ?: d?.year, isSeries = d?.isSeries ?: t.isSeries)), vm.meta, d)
 
     Box(
         Modifier
@@ -158,23 +159,16 @@ fun DetailScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = bottomInset + 24.dp),
         ) {
-            item { Header(t, d, vm.meta) }
+            item { Header(t, d, vm.meta, info.poster) }
 
             item {
                 Column(Modifier.padding(horizontal = 16.dp)) {
                     Spacer(Modifier.height(8.dp))
                     val isSeries = d?.isSeries ?: t.isSeries
-                    val meta = listOfNotNull(
-                        d?.year ?: t.year,
-                        (t.rating ?: d?.rating)?.let { "★ $it" },
-                        d?.duration,
-                        if (isSeries) "${(d?.seasons?.size ?: 1).coerceAtLeast(1)} Season" else "Film",
-                    ).joinToString("   ")
-                    Text(meta, color = TextDim, fontSize = 14.sp)
-                    val genres = t.genres.ifEmpty { d?.genres.orEmpty() }
-                    if (genres.isNotEmpty()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(genres.joinToString(" • "), color = TextDim, fontSize = 13.sp)
+                    InfoBadges(info, isSeries, d?.seasons?.size)
+                    if (info.genres.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(info.genres.joinToString("  •  "), color = TextDim, fontSize = 13.sp)
                     }
                     Spacer(Modifier.height(14.dp))
 
@@ -217,7 +211,7 @@ fun DetailScreen(
                         modifier = Modifier.fillMaxWidth(),
                     )
 
-                    val description = vm.meta?.description ?: t.description ?: d?.description
+                    val description = info.description
                     description?.let {
                         Spacer(Modifier.height(14.dp))
                         Text(it, color = Color.White, style = MaterialTheme.typography.bodyMedium)
@@ -307,14 +301,14 @@ fun SeasonChips(d: Details, selected: Int, onSelect: (Int) -> Unit) {
 }
 
 @Composable
-private fun Header(t: Title, d: Details?, meta: AddonMeta?) {
+private fun Header(t: Title, d: Details?, meta: AddonMeta?, poster: String?) {
     Box(
         Modifier
             .fillMaxWidth()
             .aspectRatio(0.82f),
     ) {
         AsyncImage(
-            model = t.poster ?: d?.poster ?: t.backdrop,
+            model = poster ?: t.poster ?: d?.poster ?: t.backdrop,
             contentDescription = t.title,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),

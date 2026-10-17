@@ -34,12 +34,13 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import android.net.Uri
-import com.moviebox.app.data.AddonCatalog
+import com.moviebox.app.data.Genre
 import com.moviebox.app.data.Library
 import com.moviebox.app.data.Resolver
 import com.moviebox.app.data.Title
 import com.moviebox.app.data.TitleStore
-import com.moviebox.app.ui.CategoryScreen
+import com.moviebox.app.ui.GenreScreen
+import com.moviebox.app.ui.HomeFilter
 import com.moviebox.app.ui.Accent
 import com.moviebox.app.ui.Background
 import com.moviebox.app.ui.DetailScreen
@@ -102,7 +103,14 @@ private fun LumiApp() {
         if (item.isSeries) details(item) else playTitle(context, item)
     }
     val play: (Title) -> Unit = { item -> playTitle(context, item) }
-    val category: (AddonCatalog) -> Unit = { c -> nav.navigate("category/${Uri.encode(c.key)}") }
+    val genre: (Genre) -> Unit = { g ->
+        val type = when (homeVm.filter) {
+            HomeFilter.MOVIES -> "movie"
+            HomeFilter.SERIES -> "series"
+            HomeFilter.ALL -> "all"
+        }
+        nav.navigate("genre/${Uri.encode(g.label)}/$type")
+    }
 
     Scaffold(
         containerColor = Background,
@@ -115,7 +123,7 @@ private fun LumiApp() {
         ) {
             NavHost(navController = nav, startDestination = Tab.HOME.route) {
                 composable(Tab.HOME.route) {
-                    HomeScreen(vm = homeVm, onOpen = open, onDetails = details, onPlay = play, onCategory = category)
+                    HomeScreen(vm = homeVm, onOpen = open, onDetails = details, onPlay = play, onGenre = genre)
                 }
                 composable(Tab.SEARCH.route) {
                     SearchScreen(suggestions = homeVm.allTitles(), onOpen = open, onDetails = details)
@@ -134,11 +142,15 @@ private fun LumiApp() {
                     )
                 }
                 composable(
-                    route = "category/{key}",
-                    arguments = listOf(navArgument("key") { type = NavType.StringType }),
+                    route = "genre/{label}/{type}",
+                    arguments = listOf(
+                        navArgument("label") { type = NavType.StringType },
+                        navArgument("type") { type = NavType.StringType },
+                    ),
                 ) { entry ->
-                    CategoryScreen(
-                        key = Uri.decode(entry.arguments?.getString("key").orEmpty()),
+                    GenreScreen(
+                        label = Uri.decode(entry.arguments?.getString("label").orEmpty()),
+                        type = entry.arguments?.getString("type") ?: "all",
                         onBack = { nav.popBackStack() },
                         onOpen = open,
                         onDetails = details,

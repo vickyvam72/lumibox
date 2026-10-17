@@ -1,10 +1,12 @@
-@file:OptIn(ExperimentalMaterial3Api::class)
+@file:OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 
 package com.moviebox.app.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,6 +24,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -61,16 +65,30 @@ import androidx.lifecycle.viewModelScope
 import coil.compose.AsyncImage
 import com.moviebox.app.data.Addon
 import com.moviebox.app.data.AddonCatalog
+import com.moviebox.app.data.Genre
+import com.moviebox.app.data.Genres
 import com.moviebox.app.data.Library
+import com.moviebox.app.data.MovieBoxWeb
 import com.moviebox.app.data.Repo
 import com.moviebox.app.data.Section
 import com.moviebox.app.data.Title
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class HomeFilter { ALL, SERIES, MOVIES }
 
+/** Satu baris di beranda: dari katalog addon atau dari filter MovieBox. */
+data class HomeRow(
+    val key: String,
+    val title: String,
+    val isSeries: Boolean,
+    val catalog: AddonCatalog? = null,
+    val webTab: Int = 0,
+    val webGenre: String = "ALL",
+    val webCountry: String = "ALL",
+)
+
 class HomeViewModel : ViewModel() {
-    // ---- katalog addon (kategori) ----
     var catalogs by mutableStateOf<List<AddonCatalog>>(emptyList())
         private set
     var catalogsLoading by mutableStateOf(true)
@@ -78,7 +96,6 @@ class HomeViewModel : ViewModel() {
     val rows = mutableStateMapOf<String, List<Title>>()
     private val loadingRows = mutableSetOf<String>()
 
-    // ---- beranda MovieBox ----
     var sections by mutableStateOf<List<Section>>(emptyList())
         private set
     var loading by mutableStateOf(false)
@@ -104,16 +121,75 @@ class HomeViewModel : ViewModel() {
         viewModelScope.launch {
             catalogs = runCatching { Addon.catalogs() }.getOrDefault(emptyList())
             catalogsLoading = false
-            catalogs.take(3).forEach { loadRow(it) }
+            mainRows().forEach { loadRow(it) }
         }
     }
 
-    fun loadRow(c: AddonCatalog) {
-        if (rows.containsKey(c.key) || !loadingRows.add(c.key)) return
+    /** 4 kategori utama: Film Lokal, Serial Lokal, Film Global, Serial Global. */
+    fun mainRows(): List<HomeRow> {
+        fun find(series: Boolean, word: String) =
+            catalogs.firstOrNull { it.isSeries == series && it.name.contains(word, ignoreCase = true) }
+        val lokalFilm = find(false, "lokal") ?: find(false, "local")
+        val lokalSerial = find(true, "lokal") ?: find(true, "local")
+        val globalFilm = find(false, "global")
+        val globalSerial = find(true, "global")
+        return listOf(
+            lokalFilm?.let { HomeRow("main-film-lokal", "Film Lokal", false, catalog = it) }
+                ?: HomeRow("main-film-lokal", "Film Lokal", false, webTab = MovieBoxWeb.TAB_MOVIES, webCountry = "Indonesia"),
+            lokalSerial?.let { HomeRow("main-serial-lokal", "Serial Lokal", true, catalog = it) }
+                ?: HomeRow("main-serial-lokal", "Serial Lokal", true, webTab = MovieBoxWeb.TAB_SERIES, webCountry = "Indonesia"),
+            globalFilm?.let { HomeRow("main-film-global", "Film Global", false, catalog = it) }
+                ?: HomeRow("main-film-global", "Film Global", false, webTab = MovieBoxWeb.TAB_MOVIES),
+            globalSerial?.let { HomeRow("main-serial-global", "Serial Global", true, catalog = it) }
+                ?: HomeRow("main-serial-global", "Serial Global", true, webTab = MovieBoxWeb.TAB_SERIES),
+        )
+    }
+
+    /** Baris tambahan: platform populer dari addon + beberapa genre favorit. */
+    fun extraRows(): List<HomeRow> {
+        val used = mainRows().mapNotNull { it.catalog?.key }.toSet()
+        val fromAddon = catalogs.filter { it.key !in used }.map {
+            HomeRow("cat-${it.key}", prettyName(it.name), it.isSeries, catalog = it)
+        }
+        val genreRows = listOf(
+            HomeRow("g-horor-lokal", "Horor Indonesia", false, webTab = MovieBoxWeb.TAB_MOVIES, webGenre = "Horror", webCountry = "Indonesia"),
+            HomeRow("g-komedi", "Komedi Paling Seru", false, webTab = MovieBoxWeb.TAB_MOVIES, webGenre = "Comedy"),
+            HomeRow("g-anime", "Anime", true, webTab = MovieBoxWeb.TAB_SERIES, webGenre = "Anime"),
+            HomeRow("g-romantis", "Kisah Romantis", false, webTab = MovieBoxWeb.TAB_MOVIES, webGenre = "Romance"),
+        )
+        // Selang-seling supaya beranda tidak monoton.
+        val out = mutableListOf<HomeRow>()
+        val a = fromAddon.iterator()
+        val g = genreRows.iterator()
+        while (a.hasNext() || g.hasNext()) {
+            if (a.hasNext()) out += a.next()
+            if (a.hasNext()) out += a.next()
+            if (g.hasNext()) out += g.next()
+        }
+        return out
+    }
+
+    private fun prettyName(name: String): String {
+        val parts = name.split("·").map { it.trim() }
+        return if (parts.size == 3 && parts[2].equals("Populer", true)) {
+            "${parts[1]} Populer di ${parts[0]}"
+        } else {
+            name
+        }
+    }
+
+    fun loadRow(r: HomeRow) {
+        if (rows.containsKey(r.key) || !loadingRows.add(r.key)) return
         viewModelScope.launch {
-            val items = runCatching { Addon.catalog(c) }.getOrDefault(emptyList())
-            rows[c.key] = items
-            loadingRows.remove(c.key)
+            val items = runCatching {
+                if (r.catalog != null) {
+                    Addon.catalog(r.catalog)
+                } else {
+                    MovieBoxWeb.filter(r.webTab, genre = r.webGenre, country = r.webCountry)
+                }
+            }.getOrDefault(emptyList())
+            rows[r.key] = items
+            loadingRows.remove(r.key)
         }
     }
 
@@ -152,9 +228,14 @@ class HomeViewModel : ViewModel() {
         endReached = false
         rows.clear()
         loadingRows.clear()
-        catalogs.take(3).forEach { loadRow(it) }
-        if (catalogs.isEmpty()) loadCatalogs()
+        if (catalogs.isEmpty()) loadCatalogs() else mainRows().forEach { loadRow(it) }
         loadMore()
+    }
+
+    fun keepRow(r: HomeRow) = when (filter) {
+        HomeFilter.ALL -> true
+        HomeFilter.SERIES -> r.isSeries
+        HomeFilter.MOVIES -> !r.isSeries
     }
 
     private fun keep(t: Title) = when (filter) {
@@ -163,31 +244,22 @@ class HomeViewModel : ViewModel() {
         HomeFilter.MOVIES -> !t.isSeries
     }
 
-    fun visibleCatalogs(): List<AddonCatalog> = catalogs.filter {
-        when (filter) {
-            HomeFilter.ALL -> true
-            HomeFilter.SERIES -> it.isSeries
-            HomeFilter.MOVIES -> !it.isSeries
-        }
-    }
-
     fun visibleSections(): List<Section> = sections.mapNotNull { s ->
         val items = s.items.filter(::keep)
         if (items.isEmpty()) null else s.copy(items = items)
     }
 
-    fun hero(): Title? {
-        visibleCatalogs().forEach { c ->
-            rows[c.key]?.firstOrNull { it.backdrop != null || it.poster != null }?.let { return it }
-        }
-        val visible = visibleSections()
-        return visible.firstOrNull { it.banner }?.items?.firstOrNull()
-            ?: visible.firstOrNull()?.items?.firstOrNull()
+    /** Isi carousel: selang-seling dari 4 kategori utama. */
+    fun heroItems(): List<Title> {
+        val lists = mainRows().filter(::keepRow).map { rows[it.key].orEmpty().take(3) }
+        val out = mutableListOf<Title>()
+        for (i in 0 until 3) lists.forEach { l -> l.getOrNull(i)?.let { out += it } }
+        if (out.isEmpty()) out += visibleSections().flatMap { it.items }.take(8)
+        return out.distinctBy { it.key }.take(10)
     }
 
-    /** Semua judul unik (untuk rekomendasi di halaman Cari). */
     fun allTitles(): List<Title> =
-        (catalogs.flatMap { rows[it.key].orEmpty() } + sections.flatMap { it.items }).distinctBy { it.key }
+        (rows.values.flatten() + sections.flatMap { it.items }).distinctBy { it.key }
 }
 
 @Composable
@@ -196,12 +268,13 @@ fun HomeScreen(
     onOpen: (Title) -> Unit,
     onDetails: (Title) -> Unit,
     onPlay: (Title) -> Unit,
-    onCategory: (AddonCatalog) -> Unit,
+    onGenre: (Genre) -> Unit,
 ) {
-    val hero = vm.hero()
-    val catalogs = vm.visibleCatalogs()
+    val heroItems = vm.heroItems()
+    val main = vm.mainRows().filter(vm::keepRow)
+    val extra = vm.extraRows().filter(vm::keepRow)
     val sections = vm.visibleSections()
-    var showCategories by remember { mutableStateOf(false) }
+    var showGenres by remember { mutableStateOf(false) }
 
     PullToRefreshBox(
         isRefreshing = vm.refreshing,
@@ -220,88 +293,82 @@ fun HomeScreen(
                     TopBar(onRefresh = { vm.refresh() })
                     FilterChips(
                         current = vm.filter,
-                        hasCategories = vm.catalogs.isNotEmpty(),
                         onChange = { vm.filter = it },
-                        onCategories = { showCategories = true },
+                        onCategories = { showGenres = true },
                     )
                 }
             }
 
-            val nothingYet = sections.isEmpty() && catalogs.none { vm.rows[it.key]?.isNotEmpty() == true }
-            if (nothingYet && (vm.loading || vm.catalogsLoading)) {
+            if (heroItems.isNotEmpty()) {
+                item(key = "hero") {
+                    HeroCarousel(items = heroItems, onPlay = onPlay, onDetails = onDetails)
+                }
+            } else if (vm.catalogsLoading || vm.loading) {
                 item(key = "loading") {
                     Box(Modifier.fillMaxWidth().height(420.dp)) { CenterLoading() }
                 }
-            } else if (nothingYet && vm.error != null) {
-                item(key = "error") {
-                    ErrorBox(vm.error ?: "", onRetry = { vm.refresh() })
-                }
-            }
-
-            if (hero != null) {
-                item(key = "hero-${hero.key}") {
-                    HeroCard(item = hero, onPlay = { onPlay(hero) }, onDetails = { onDetails(hero) })
-                }
+            } else if (vm.error != null && sections.isEmpty()) {
+                item(key = "error") { ErrorBox(vm.error ?: "", onRetry = { vm.refresh() }) }
             }
 
             if (Library.history.isNotEmpty() && vm.filter == HomeFilter.ALL) {
-                item(key = "continue") {
-                    ContinueRow(onPlayEntry = onPlay, onDetails = onDetails)
+                item(key = "continue") { ContinueRow(onPlayEntry = onPlay, onDetails = onDetails) }
+            }
+
+            // 4 kategori utama
+            main.forEach { r -> rowItem(r, vm, onOpen, onDetails, top10 = false) }
+
+            // Top 10 dari MovieBox
+            sections.firstOrNull { !it.banner }?.let { top ->
+                item(key = "top10") {
+                    TitleRow("Top 10 Hari Ini", top.items.take(10), onOpen, onDetails, top10 = true)
                 }
             }
 
-            // Kategori dari addon EasyRatings
-            catalogs.forEachIndexed { index, c ->
-                item(key = "cat-${c.key}") {
-                    LaunchedEffect(c.key) { vm.loadRow(c) }
-                    val items = vm.rows[c.key]
-                    when {
-                        items == null -> RowPlaceholder(c.name)
-                        items.isNotEmpty() -> TitleRow(
-                            title = c.name,
-                            items = items,
-                            onOpen = onOpen,
-                            onDetails = onDetails,
-                            top10 = index == 0,
-                        )
-                    }
-                }
-            }
+            // Baris tambahan (platform populer + genre)
+            extra.forEach { r -> rowItem(r, vm, onOpen, onDetails, top10 = false) }
 
-            // Baris dari beranda MovieBox (termasuk film Indonesia)
-            sections.forEachIndexed { index, section ->
+            // Sisa beranda MovieBox
+            sections.drop(1).forEachIndexed { index, section ->
                 item(key = "s-$index-${section.items.first().key}") {
-                    TitleRow(
-                        title = section.title,
-                        items = section.items,
-                        onOpen = onOpen,
-                        onDetails = onDetails,
-                        top10 = catalogs.isEmpty() && index == sections.indexOfFirst { !it.banner },
-                    )
+                    TitleRow(section.title, section.items, onOpen, onDetails)
                 }
             }
 
             item(key = "footer") {
-                when {
-                    vm.error != null && sections.isNotEmpty() -> ErrorBox(vm.error ?: "", onRetry = { vm.loadMore() })
-                    !vm.endReached -> {
-                        LaunchedEffect(vm.sections.size) { vm.loadMore() }
-                        SmallLoading()
-                    }
+                if (!vm.endReached && vm.error == null) {
+                    LaunchedEffect(vm.sections.size) { vm.loadMore() }
+                    SmallLoading()
                 }
             }
         }
     }
 
-    if (showCategories) {
-        CategoryDialog(
-            catalogs = vm.catalogs,
+    if (showGenres) {
+        GenreDialog(
             onPick = {
-                showCategories = false
-                onCategory(it)
+                showGenres = false
+                onGenre(it)
             },
-            onDismiss = { showCategories = false },
+            onDismiss = { showGenres = false },
         )
+    }
+}
+
+private fun androidx.compose.foundation.lazy.LazyListScope.rowItem(
+    r: HomeRow,
+    vm: HomeViewModel,
+    onOpen: (Title) -> Unit,
+    onDetails: (Title) -> Unit,
+    top10: Boolean,
+) {
+    item(key = r.key) {
+        LaunchedEffect(r.key) { vm.loadRow(r) }
+        val items = vm.rows[r.key]
+        when {
+            items == null -> RowPlaceholder(r.title)
+            items.isNotEmpty() -> TitleRow(r.title, items, onOpen, onDetails, top10 = top10)
+        }
     }
 }
 
@@ -352,7 +419,6 @@ private fun TopBar(onRefresh: () -> Unit) {
 @Composable
 private fun FilterChips(
     current: HomeFilter,
-    hasCategories: Boolean,
     onChange: (HomeFilter) -> Unit,
     onCategories: () -> Unit,
 ) {
@@ -377,13 +443,11 @@ private fun FilterChips(
                 onChange(if (current == HomeFilter.MOVIES) HomeFilter.ALL else HomeFilter.MOVIES)
             }) { Text("Film", color = Color.White, fontSize = 15.sp) }
         }
-        if (hasCategories) {
-            item {
-                Pill(selected = false, onClick = onCategories) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Kategori", color = Color.White, fontSize = 15.sp)
-                        Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
-                    }
+        item {
+            Pill(selected = false, onClick = onCategories) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Kategori", color = Color.White, fontSize = 15.sp)
+                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = null, tint = Color.White, modifier = Modifier.size(20.dp))
                 }
             }
         }
@@ -395,17 +459,17 @@ private fun Pill(selected: Boolean, onClick: () -> Unit, content: @Composable ()
     Box(
         Modifier
             .clip(RoundedCornerShape(50))
-            .background(if (selected) Color.White.copy(alpha = 0.22f) else Color.Transparent)
-            .border(1.dp, Color.White.copy(alpha = 0.45f), RoundedCornerShape(50))
+            .background(if (selected) Accent.copy(alpha = 0.28f) else Color.Transparent)
+            .border(1.dp, if (selected) Accent else Color.White.copy(alpha = 0.45f), RoundedCornerShape(50))
             .clickable(onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) { content() }
 }
 
-/** Daftar kategori layar penuh (seperti menu "Kategori" di aplikasi streaming). */
+/** Menu "Kategori" berisi genre. */
 @Composable
-private fun CategoryDialog(catalogs: List<AddonCatalog>, onPick: (AddonCatalog) -> Unit, onDismiss: () -> Unit) {
+private fun GenreDialog(onPick: (Genre) -> Unit, onDismiss: () -> Unit) {
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Box(
             Modifier
@@ -417,15 +481,15 @@ private fun CategoryDialog(catalogs: List<AddonCatalog>, onPick: (AddonCatalog) 
                 contentPadding = PaddingValues(top = 80.dp, bottom = 140.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                items(catalogs, key = { it.key }) { c ->
+                items(Genres.all, key = { it.label }) { g ->
                     Text(
-                        c.name,
+                        g.label,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onPick(c) }
-                            .padding(vertical = 14.dp),
+                            .clickable { onPick(g) }
+                            .padding(vertical = 13.dp),
                         color = TextDim,
-                        fontSize = 18.sp,
+                        fontSize = 19.sp,
                         textAlign = TextAlign.Center,
                     )
                 }
@@ -446,12 +510,49 @@ private fun CategoryDialog(catalogs: List<AddonCatalog>, onPick: (AddonCatalog) 
     }
 }
 
+/** Poster utama yang berganti tiap 2 detik dan bisa digeser. */
+@Composable
+private fun HeroCarousel(items: List<Title>, onPlay: (Title) -> Unit, onDetails: (Title) -> Unit) {
+    val pager = rememberPagerState(pageCount = { items.size })
+    val dragged by pager.interactionSource.collectIsDraggedAsState()
+    LaunchedEffect(items.size, dragged) {
+        if (!dragged && items.size > 1) {
+            while (true) {
+                delay(2_000)
+                pager.animateScrollToPage((pager.currentPage + 1) % items.size)
+            }
+        }
+    }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        HorizontalPager(
+            state = pager,
+            contentPadding = PaddingValues(horizontal = 20.dp),
+            pageSpacing = 12.dp,
+            key = { items[it].key },
+        ) { page ->
+            val item = items[page]
+            HeroCard(item = item, onPlay = { onPlay(item) }, onDetails = { onDetails(item) })
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            repeat(items.size) { i ->
+                Box(
+                    Modifier
+                        .size(if (i == pager.currentPage) 8.dp else 6.dp)
+                        .clip(CircleShape)
+                        .background(if (i == pager.currentPage) Accent else Color.White.copy(alpha = 0.35f)),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun HeroCard(item: Title, onPlay: () -> Unit, onDetails: () -> Unit) {
     val inList = Library.isInList(item.key)
+    val info = mergeInfo(item, rememberTmdb(item), null, null)
     Box(
         Modifier
-            .padding(horizontal = 20.dp)
             .fillMaxWidth()
             .aspectRatio(0.7f)
             .clip(RoundedCornerShape(14.dp))
@@ -460,7 +561,7 @@ private fun HeroCard(item: Title, onPlay: () -> Unit, onDetails: () -> Unit) {
             .clickable(onClick = onDetails),
     ) {
         AsyncImage(
-            model = item.poster ?: item.backdrop,
+            model = info.poster ?: info.backdrop,
             contentDescription = item.title,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -468,12 +569,7 @@ private fun HeroCard(item: Title, onPlay: () -> Unit, onDetails: () -> Unit) {
         Box(
             Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        0.45f to Color.Transparent,
-                        1f to Color.Black.copy(alpha = 0.92f),
-                    ),
-                ),
+                .background(Brush.verticalGradient(0.45f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.92f))),
         )
         Column(
             Modifier
@@ -504,12 +600,11 @@ private fun HeroCard(item: Title, onPlay: () -> Unit, onDetails: () -> Unit) {
                 )
             }
             Spacer(Modifier.height(8.dp))
-            val meta = buildList {
-                add(if (item.isSeries) "Serial" else "Film")
-                addAll(item.genres.take(3))
-                item.rating?.let { add("★ $it") }
-            }.joinToString("  •  ")
-            Text(meta, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp, textAlign = TextAlign.Center)
+            if (info.genres.isNotEmpty()) {
+                Text(info.genres.take(3).joinToString("  •  "), color = Color.White, fontSize = 13.sp, textAlign = TextAlign.Center)
+                Spacer(Modifier.height(4.dp))
+            }
+            InfoBadges(info, item.isSeries)
             Spacer(Modifier.height(14.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 PlayButton("Putar", onClick = onPlay, modifier = Modifier.weight(1f))

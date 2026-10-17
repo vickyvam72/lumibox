@@ -28,19 +28,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.moviebox.app.data.Addon
-import com.moviebox.app.data.AddonCatalog
+import com.moviebox.app.data.Genres
+import com.moviebox.app.data.MovieBoxWeb
 import com.moviebox.app.data.Title
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 
-class CategoryViewModel(private val key: String) : ViewModel() {
-    var catalog by mutableStateOf<AddonCatalog?>(null)
-        private set
+/** type: "all", "movie", atau "series". */
+class GenreViewModel(private val label: String, private val type: String) : ViewModel() {
     var items by mutableStateOf<List<Title>>(emptyList())
         private set
     var loading by mutableStateOf(false)
@@ -49,6 +48,7 @@ class CategoryViewModel(private val key: String) : ViewModel() {
         private set
     var endReached by mutableStateOf(false)
         private set
+    private var page = 0
 
     init {
         loadMore()
@@ -56,19 +56,32 @@ class CategoryViewModel(private val key: String) : ViewModel() {
 
     fun loadMore() {
         if (loading || endReached) return
+        val genre = Genres.byLabel(label)?.movieBox ?: label
         loading = true
         error = null
         viewModelScope.launch {
             try {
-                val c = catalog ?: (Addon.catalogByKey(key) ?: Addon.catalogs().firstOrNull { it.key == key })
-                    ?: throw IllegalStateException("Kategori tidak ditemukan")
-                catalog = c
-                val next = Addon.catalog(c, skip = items.size)
+                val next = page + 1
+                val movies = if (type != "series") async { runCatching { MovieBoxWeb.filter(MovieBoxWeb.TAB_MOVIES, genre, page = next) }.getOrDefault(emptyList()) } else null
+                val series = if (type != "movie") async { runCatching { MovieBoxWeb.filter(MovieBoxWeb.TAB_SERIES, genre, page = next) }.getOrDefault(emptyList()) } else null
+                val m = movies?.await().orEmpty()
+                val s = series?.await().orEmpty()
+                val merged = mutableListOf<Title>()
+                for (i in 0 until maxOf(m.size, s.size)) {
+                    m.getOrNull(i)?.let { merged += it }
+                    s.getOrNull(i)?.let { merged += it }
+                }
                 val known = items.map { it.key }.toSet()
-                val fresh = next.filter { it.key !in known }
-                if (fresh.isEmpty()) endReached = true else items = items + fresh
+                val fresh = merged.filter { it.key !in known }
+                if (fresh.isEmpty()) {
+                    endReached = true
+                    if (items.isEmpty()) error = "Belum ada judul untuk genre ini."
+                } else {
+                    page = next
+                    items = items + fresh
+                }
             } catch (e: Exception) {
-                error = e.message ?: "Gagal memuat kategori"
+                error = e.message ?: "Gagal memuat genre"
             } finally {
                 loading = false
             }
@@ -77,13 +90,19 @@ class CategoryViewModel(private val key: String) : ViewModel() {
 }
 
 @Composable
-fun CategoryScreen(
-    key: String,
+fun GenreScreen(
+    label: String,
+    type: String,
     onBack: () -> Unit,
     onOpen: (Title) -> Unit,
     onDetails: (Title) -> Unit,
 ) {
-    val vm: CategoryViewModel = viewModel(key = "cat-$key") { CategoryViewModel(key) }
+    val vm: GenreViewModel = viewModel(key = "genre-$label-$type") { GenreViewModel(label, type) }
+    val heading = when (type) {
+        "movie" -> "Film $label"
+        "series" -> "Serial $label"
+        else -> label
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -94,14 +113,7 @@ fun CategoryScreen(
             IconButton(onClick = onBack) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Kembali", tint = Color.White)
             }
-            Text(
-                vm.catalog?.name ?: "Kategori",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = Color.White,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Text(heading, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
         }
         Box(Modifier.fillMaxSize()) {
             if (vm.items.isEmpty() && vm.loading) {

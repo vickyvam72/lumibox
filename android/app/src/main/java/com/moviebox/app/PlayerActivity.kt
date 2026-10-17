@@ -132,8 +132,6 @@ class PlayerActivity : ComponentActivity() {
     private var captions by mutableStateOf<List<Caption>>(emptyList())
     private var captionLabels: Map<Caption, String> = emptyMap()
     private var selectedCaption by mutableStateOf<Caption?>(null)
-    private var pendingCaption: Caption? = null
-    private var pendingCaptionSet = false
     private var readyOnce = false
     private var loadJob: Job? = null
     private var lastErrorMessage: String? = null
@@ -146,6 +144,8 @@ class PlayerActivity : ComponentActivity() {
     private var buffering by mutableStateOf(false)
     private var tracksVersion by mutableIntStateOf(0)
     private var speed by mutableFloatStateOf(1f)
+    private var cues by mutableStateOf<List<com.moviebox.app.data.Cue>>(emptyList())
+    private var subtitleOffsetMs by mutableLongStateOf(0L)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -204,10 +204,23 @@ class PlayerActivity : ComponentActivity() {
                 loadingMessage = "Menyiapkan video…"
             }
 
+            loadOffset()
+
             // Meta addon (judul & gambar episode) — tidak menahan pemutaran.
             val imdb = title.imdbId
             if (meta == null && !imdb.isNullOrBlank()) {
-                launch { meta = runCatching { Addon.meta(if (title.isSeries) "series" else "movie", imdb) }.getOrNull() }
+                launch {
+                    meta = runCatching { Addon.meta(if (title.isSeries) "series" else "movie", imdb) }.getOrNull()
+                    recheckDuration()
+                }
+            }
+            if (com.moviebox.app.data.Tmdb.enabled && !title.isSeries) {
+                launch {
+                    runCatching {
+                        com.moviebox.app.data.Tmdb.info(title.copy(title = title.title.ifBlank { details?.title ?: "" }))
+                    }
+                    recheckDuration()
+                }
             }
 
             val detailsJob = async { details ?: runCatching { Repo.details(subjectId) }.getOrNull() }
@@ -255,25 +268,70 @@ class PlayerActivity : ComponentActivity() {
             streams = rank(found)
             streamIndex = 0
 
-            // 3) Subtitle: tunggu sebentar saja; kalau lambat, video jalan dulu.
+            // 3) Video langsung jalan; subtitle dimuat paralel (dirender sendiri, tidak perlu memuat ulang video).
             loadingMessage = "Memutar…"
-            val captionsJob = async { loadCaptions(usedId) }
-            val quick = withTimeoutOrNull(1_200L) { captionsJob.await() }
-            applyCaptions(quick ?: emptyList())
-            applyLanguagePreferences()
-
+            mismatchChecked = false
+            applyAudioPreference()
             val startAt = startAtMs ?: if (resume) resumePosition() else 0L
             playCurrent(startAt)
 
-            if (quick == null) {
-                val late = captionsJob.await()
-                if (late.isNotEmpty()) {
-                    applyCaptions(late)
-                    applyLanguagePreferences()
-                    // Pasang ulang sumber dengan subtitle di posisi yang sama.
-                    playCurrent(player.currentPosition.coerceAtLeast(0L), keepState = true)
-                }
-            }
+            val list = loadCaptions(usedId)
+            applyCaptions(list)
+            val keep = selectedCaption?.let { cur -> list.firstOrNull { it.url == cur.url || it.name == cur.name } }
+            selectCaption(keep ?: autoCaption())
+        }
+    }
+
+    // ---- cek durasi: cegah film yang isinya tidak sesuai judul ----
+
+    private var mismatchChecked = false
+    private val mismatchedStreams = mutableSetOf<String>()
+
+    /** Durasi film yang diharapkan (detik), hanya untuk film (bukan episode). */
+    private fun expectedSeconds(): Long? {
+        if (title.isSeries || season > 0) return null
+        val tmdbMin = com.moviebox.app.data.Tmdb.cached(title.copy(title = title.title.ifBlank { details?.title ?: "" }))?.runtimeMin
+        val metaMin = meta?.runtimeMin
+        return (tmdbMin ?: metaMin)?.let { it * 60L } ?: details?.durationSeconds
+    }
+
+    private fun isSuspicious(actualSec: Long?): Boolean {
+        val expected = expectedSeconds() ?: return false
+        val actual = actualSec ?: return false
+        if (actual <= 0) return false
+        return kotlin.math.abs(actual - expected) > maxOf(480L, (expected * 0.12).toLong())
+    }
+
+    /** Dipanggil saat data durasi asli baru datang (TMDB/addon). */
+    private fun recheckDuration() {
+        if (readyOnce && streams.getOrNull(streamIndex)?.url !in mismatchedStreams) {
+            mismatchChecked = false
+            checkDurationOnReady()
+        }
+    }
+
+    private fun checkDurationOnReady() {
+        if (mismatchChecked) return
+        mismatchChecked = true
+        val stream = streams.getOrNull(streamIndex) ?: return
+        val actual = player.duration.takeIf { it > 0 }?.div(1000) ?: return
+        if (!isSuspicious(actual)) return
+        mismatchedStreams += stream.url
+        val nextGood = streams.indices.firstOrNull { i ->
+            i != streamIndex && streams[i].url !in mismatchedStreams && !isSuspicious(streams[i].durationSec)
+        }
+        if (nextGood != null) {
+            Toast.makeText(this, "Video tidak cocok dengan judul, mencoba sumber lain…", Toast.LENGTH_SHORT).show()
+            streamIndex = nextGood
+            mismatchChecked = false
+            readyOnce = false
+            playCurrent(0L)
+        } else {
+            Toast.makeText(
+                this,
+                "Durasi video berbeda dari film aslinya. Kalau isinya salah, ganti sumber di menu Audio & Subtitle.",
+                Toast.LENGTH_LONG,
+            ).show()
         }
     }
 
@@ -308,7 +366,7 @@ class PlayerActivity : ComponentActivity() {
     private fun rank(list: List<Stream>): List<Stream> = list
         .distinctBy { it.url }
         .sortedWith(
-            compareBy<Stream> {
+            compareBy<Stream> { if (isSuspicious(it.durationSec)) 1 else 0 }.thenBy {
                 when {
                     it.height in 1..1080 -> 0
                     it.height == 0 -> 1
@@ -328,14 +386,10 @@ class PlayerActivity : ComponentActivity() {
             ?: if (original == null) captions.firstOrNull { Lang.ofCaption(it) == "en" } else null
     }
 
-    private fun applyLanguagePreferences() {
-        val chosen = if (selectedCaption != null && selectedCaption in captions) selectedCaption else autoCaption()
-        selectedCaption = chosen
-        pendingCaption = chosen
-        pendingCaptionSet = true
+    /** Audio bahasa asli; subtitle bawaan stream dimatikan (pakai renderer subtitle sendiri). */
+    private fun applyAudioPreference() {
         val params = player.trackSelectionParameters.buildUpon()
-            .setPreferredTextLanguages(*listOfNotNull(chosen?.let { Lang.ofCaption(it) }).toTypedArray())
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, chosen == null)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
         originalLanguageCode()?.let { params.setPreferredAudioLanguages(it) }
         player.trackSelectionParameters = params.build()
     }
@@ -359,19 +413,8 @@ class PlayerActivity : ComponentActivity() {
         if (userAgent != null) http.setUserAgent(userAgent)
         val factory = DefaultMediaSourceFactory(DefaultDataSource.Factory(this, http))
 
-        val chosen = selectedCaption
-        val subtitleConfigs = captions.map { c ->
-            MediaItem.SubtitleConfiguration.Builder(Uri.parse(c.url))
-                .setMimeType(subtitleMime(c.url))
-                .setLabel(captionLabels[c] ?: c.name)
-                .setLanguage(Lang.ofCaption(c))
-                .setSelectionFlags(if (c == chosen) C.SELECTION_FLAG_DEFAULT else 0)
-                .build()
-        }
-
         val item = MediaItem.Builder()
             .setUri(stream.url)
-            .setSubtitleConfigurations(subtitleConfigs)
         val path = stream.url.substringBefore('?').lowercase()
         when {
             path.endsWith(".mpd") || path.contains("/dash/") -> item.setMimeType(MimeTypes.APPLICATION_MPD)
@@ -392,6 +435,7 @@ class PlayerActivity : ComponentActivity() {
                 Player.STATE_READY -> if (!readyOnce) {
                     readyOnce = true
                     loadingMessage = null
+                    checkDurationOnReady()
                 }
 
                 Player.STATE_ENDED -> onEnded()
@@ -405,13 +449,6 @@ class PlayerActivity : ComponentActivity() {
 
         override fun onTracksChanged(tracks: Tracks) {
             tracksVersion++
-            if (pendingCaptionSet) {
-                val hasText = tracks.groups.any { it.type == C.TRACK_TYPE_TEXT }
-                if (hasText || pendingCaption == null) {
-                    pendingCaptionSet = false
-                    selectCaption(pendingCaption)
-                }
-            }
         }
 
         override fun onPlayerError(error: PlaybackException) {
@@ -446,26 +483,33 @@ class PlayerActivity : ComponentActivity() {
 
     // ================================================================== pilihan audio & subtitle
 
+    private var cueJob: Job? = null
+
     private fun selectCaption(c: Caption?) {
         selectedCaption = c
-        val params = player.trackSelectionParameters.buildUpon()
-            .clearOverridesOfType(C.TRACK_TYPE_TEXT)
-        if (c == null) {
-            params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-        } else {
-            params.setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
-            val label = captionLabels[c] ?: c.name
-            val group = player.currentTracks.groups.firstOrNull { g ->
-                g.type == C.TRACK_TYPE_TEXT && (0 until g.length).any { g.getTrackFormat(it).label == label }
-            }
-            if (group != null) {
-                val index = (0 until group.length).first { group.getTrackFormat(it).label == label }
-                params.setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, index))
-            } else {
-                Lang.ofCaption(c)?.let { params.setPreferredTextLanguages(it) }
+        cues = emptyList()
+        cueJob?.cancel()
+        if (c == null) return
+        cueJob = lifecycleScope.launch {
+            val parsed = runCatching { com.moviebox.app.data.Subtitles.load(c.url) }.getOrDefault(emptyList())
+            if (selectedCaption == c) {
+                cues = parsed
+                if (parsed.isEmpty()) {
+                    Toast.makeText(this@PlayerActivity, "Subtitle gagal dimuat", Toast.LENGTH_SHORT).show()
+                }
             }
         }
-        player.trackSelectionParameters = params.build()
+    }
+
+    private fun offsetKey() = "offset_$subjectId"
+
+    private fun loadOffset() {
+        subtitleOffsetMs = getSharedPreferences("lumibox_subs", Context.MODE_PRIVATE).getLong(offsetKey(), 0L)
+    }
+
+    private fun changeOffset(deltaMs: Long?) {
+        subtitleOffsetMs = if (deltaMs == null) 0L else (subtitleOffsetMs + deltaMs).coerceIn(-600_000L, 600_000L)
+        getSharedPreferences("lumibox_subs", Context.MODE_PRIVATE).edit().putLong(offsetKey(), subtitleOffsetMs).apply()
     }
 
     private data class AudioOption(val label: String, val selected: Boolean, val onPick: () -> Unit)
@@ -638,6 +682,8 @@ class PlayerActivity : ComponentActivity() {
                 },
                 modifier = Modifier.fillMaxSize(),
             )
+
+            SubtitleOverlay(raised = controlsVisible && !locked)
 
             // Lapisan sentuh: tap = tampil/sembunyi kontrol, ketuk dua kali kiri/kanan = ±10 detik.
             Box(
@@ -1056,7 +1102,7 @@ class PlayerActivity : ComponentActivity() {
         val version = tracksVersion // baca ulang saat track berubah
         val audio = audioOptions()
         PanelFrame("Audio & Subtitle", onClose) {
-            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
+            Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(28.dp)) {
                 Column(Modifier.weight(1f)) {
                     Text("Audio", color = TextDim, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                     Spacer(Modifier.height(8.dp))
@@ -1092,7 +1138,119 @@ class PlayerActivity : ComponentActivity() {
                         }
                     }
                 }
+                Column(Modifier.weight(1.2f)) {
+                    Text("Sinkron subtitle", color = TextDim, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Spacer(Modifier.height(8.dp))
+                    SyncControls()
+                    Spacer(Modifier.height(18.dp))
+                    Text("Sumber video", color = TextDim, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Spacer(Modifier.height(4.dp))
+                    LazyColumn {
+                        items(streams.indices.toList()) { i ->
+                            val st = streams[i]
+                            val odd = st.url in mismatchedStreams || isSuspicious(st.durationSec)
+                            val label = "Sumber ${i + 1} · ${st.label}" + if (odd) "  (durasi beda)" else ""
+                            OptionRow(label, i == streamIndex) {
+                                if (i != streamIndex) {
+                                    val pos = player.currentPosition.coerceAtLeast(0L)
+                                    streamIndex = i
+                                    readyOnce = false
+                                    mismatchChecked = true
+                                    playCurrent(pos)
+                                }
+                                onClose()
+                            }
+                        }
+                    }
+                }
             }
+        }
+    }
+
+    /** Geser subtitle per 0,1 detik (+ = subtitle muncul lebih lambat). */
+    @Composable
+    private fun SyncControls() {
+        Column {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                SyncButton("−0.5") { changeOffset(-500L) }
+                SyncButton("−0.1") { changeOffset(-100L) }
+                Text(
+                    "%+.1f dtk".format(java.util.Locale.US, subtitleOffsetMs / 1000.0),
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.width(78.dp),
+                )
+                SyncButton("+0.1") { changeOffset(100L) }
+                SyncButton("+0.5") { changeOffset(500L) }
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    when {
+                        subtitleOffsetMs > 0 -> "Subtitle diperlambat"
+                        subtitleOffsetMs < 0 -> "Subtitle dipercepat"
+                        else -> "Tidak digeser"
+                    },
+                    color = TextDim,
+                    fontSize = 13.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                if (subtitleOffsetMs != 0L) {
+                    Text(
+                        "Reset",
+                        color = Accent,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { changeOffset(null) }
+                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun SyncButton(label: String, onClick: () -> Unit) {
+        Text(
+            label,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color.White.copy(alpha = 0.15f))
+                .clickable(onClick = onClick)
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            color = Color.White,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = 14.sp,
+        )
+    }
+
+    /** Subtitle yang dirender sendiri (supaya bisa disinkronkan). */
+    @Composable
+    private fun SubtitleOverlay(raised: Boolean) {
+        var text by remember { mutableStateOf<String?>(null) }
+        LaunchedEffect(cues, subtitleOffsetMs) {
+            while (true) {
+                text = com.moviebox.app.data.Subtitles.active(cues, player.currentPosition, subtitleOffsetMs)
+                delay(100)
+            }
+        }
+        val current = text ?: return
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+            Text(
+                current,
+                modifier = Modifier
+                    .padding(bottom = if (raised) 120.dp else 28.dp, start = 48.dp, end = 48.dp)
+                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 10.dp, vertical = 4.dp),
+                color = Color.White,
+                fontSize = 20.sp,
+                lineHeight = 26.sp,
+                textAlign = TextAlign.Center,
+                fontWeight = FontWeight.Medium,
+            )
         }
     }
 

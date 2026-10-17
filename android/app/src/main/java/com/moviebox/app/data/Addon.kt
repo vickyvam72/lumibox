@@ -20,7 +20,28 @@ private const val CINEMETA = "https://v3-cinemeta.strem.io"
 
 object Addon {
     private lateinit var prefs: SharedPreferences
-    private val base = ADDON_MANIFEST.removeSuffix("/manifest.json")
+    @Volatile
+    private var base = ADDON_MANIFEST.removeSuffix("/manifest.json")
+
+    /**
+     * URL addon dengan poster/backdrop TANPA badge rating EasyRatings
+     * (posterEnabled/backdropEnabled = false), terjemahan tetap aktif.
+     */
+    private val cleanManifest: String by lazy {
+        runCatching {
+            val marker = "/proxy/"
+            val start = ADDON_MANIFEST.indexOf(marker) + marker.length
+            val afterToken = ADDON_MANIFEST.indexOf('/', start) + 1
+            val end = ADDON_MANIFEST.indexOf("/manifest.json")
+            val encoded = ADDON_MANIFEST.substring(afterToken, end)
+            val flags = android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP or android.util.Base64.NO_PADDING
+            val config = JSONObject(String(android.util.Base64.decode(encoded, flags)))
+            config.put("posterEnabled", false)
+            config.put("backdropEnabled", false)
+            val reEncoded = android.util.Base64.encodeToString(config.toString().toByteArray(), flags)
+            ADDON_MANIFEST.substring(0, afterToken) + reEncoded + "/manifest.json"
+        }.getOrDefault(ADDON_MANIFEST)
+    }
 
     @Volatile
     private var catalogsCache: List<AddonCatalog>? = null
@@ -35,10 +56,21 @@ object Addon {
     suspend fun catalogs(): List<AddonCatalog> {
         catalogsCache?.let { return it }
         val manifest = try {
-            withContext(Dispatchers.IO) { getJson(ADDON_MANIFEST) }.also {
-                prefs.edit().putString("manifest", it.toString()).apply()
+            withContext(Dispatchers.IO) {
+                // Coba versi tanpa badge rating dulu; kalau ditolak, pakai URL asli.
+                val clean = runCatching { getJson(cleanManifest) }.getOrNull()
+                if (clean != null) {
+                    base = cleanManifest.removeSuffix("/manifest.json")
+                    clean
+                } else {
+                    base = ADDON_MANIFEST.removeSuffix("/manifest.json")
+                    getJson(ADDON_MANIFEST)
+                }
+            }.also {
+                prefs.edit().putString("manifest", it.toString()).putString("base", base).apply()
             }
         } catch (e: Exception) {
+            prefs.getString("base", null)?.let { base = it }
             // Pakai salinan terakhir kalau sedang offline / server lambat.
             prefs.getString("manifest", null)?.let { JSONObject(it) } ?: throw e
         }
@@ -99,7 +131,7 @@ object Addon {
         val id = o.str("id") ?: return null
         val name = o.str("name") ?: o.str("title") ?: return null
         val type = o.str("type") ?: fallbackType
-        val genres = o.optJSONArray("genres").strings().ifEmpty { o.optJSONArray("genre").strings() }
+        val genres = Genres.normalize(o.optJSONArray("genres").strings().ifEmpty { o.optJSONArray("genre").strings() })
         return Title(
             id = "",
             title = name,
@@ -128,6 +160,9 @@ object Addon {
             background = o.str("background"),
             logo = o.str("logo"),
             episodes = episodes,
+            runtimeMin = o.str("runtime")?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() },
+            genres = Genres.normalize(o.optJSONArray("genres").strings().ifEmpty { o.optJSONArray("genre").strings() }),
+            rating = o.str("imdbRating"),
         )
     }
 

@@ -192,6 +192,22 @@ pub fn details(subject_id: &str) -> String {
                     obj.insert("original_subject_id".into(), json!(info.subject_id));
                     obj.insert("original_language".into(), json!(info.language));
                     obj.insert("country".into(), json!(info.country));
+                    let subject = raw
+                        .get("data")
+                        .and_then(|d| d.get("subject"))
+                        .or_else(|| raw.get("subject"))
+                        .unwrap_or(&raw);
+                    let seconds = ["durationSeconds", "duration"].iter().find_map(|k| {
+                        let v = subject.get(*k)?;
+                        v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+                    });
+                    obj.insert("duration_seconds".into(), json!(seconds));
+                    // Data mentah yang mungkin berguna untuk genre/rating usia.
+                    for key in ["genre", "countryName", "imdbRatingValue", "ageRating", "contentRating", "certification", "rated"] {
+                        if let Some(v) = subject.get(key) {
+                            obj.insert(format!("raw_{key}"), v.clone());
+                        }
+                    }
                 }
                 ok(value)
             }

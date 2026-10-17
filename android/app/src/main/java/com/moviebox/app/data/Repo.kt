@@ -82,7 +82,9 @@ object Repo {
             rating = d.str("imdb_rating"),
             duration = d.str("duration"),
             stars = d.str("stars"),
-            genres = d.optJSONArray("genres").strings(),
+            genres = Genres.normalize(
+                d.optJSONArray("genres").strings().ifEmpty { listOfNotNull(d.str("raw_genre")) },
+            ),
             poster = d.str("poster_url"),
             seasons = d.optJSONArray("seasons").objects().map { s ->
                 SeasonInfo(
@@ -95,6 +97,9 @@ object Repo {
                 Dub(sid, dub.str("label") ?: dub.str("language") ?: "Audio", dub.str("language"))
             }.distinctBy { it.subjectId },
             originalSubjectId = d.str("original_subject_id"),
+            durationSeconds = if (d.isNull("duration_seconds")) null else d.optLong("duration_seconds").takeIf { it > 0 },
+            ageRating = listOf("raw_ageRating", "raw_contentRating", "raw_certification", "raw_rated")
+                .firstNotNullOfOrNull { d.str(it) },
             originalLanguage = d.str("original_language"),
             country = d.str("country"),
         )
@@ -115,6 +120,7 @@ object Repo {
                     url = url,
                     headers = headers,
                     resourceId = s.str("resourceId"),
+                    durationSec = if (s.isNull("durationSec")) null else s.optLong("durationSec").takeIf { it > 0 },
                 )
             }
         }

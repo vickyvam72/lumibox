@@ -57,6 +57,8 @@ data class Details(
     /** Nama bahasa asli, mis. "Korean", "Spanish". */
     val originalLanguage: String?,
     val country: String?,
+    val durationSeconds: Long? = null,
+    val ageRating: String? = null,
 ) {
     fun asTitle() = Title(id, title, isSeries, year, poster)
 
@@ -88,6 +90,7 @@ data class Stream(
     val url: String,
     val headers: List<Pair<String, String>>,
     val resourceId: String?,
+    val durationSec: Long? = null,
 )
 
 data class Caption(
@@ -139,6 +142,9 @@ data class AddonMeta(
     val background: String?,
     val logo: String?,
     val episodes: List<EpisodeMeta>,
+    val runtimeMin: Int? = null,
+    val genres: List<String> = emptyList(),
+    val rating: String? = null,
 ) {
     fun episode(season: Int, episode: Int): EpisodeMeta? =
         episodes.firstOrNull { it.season == season && it.episode == episode }

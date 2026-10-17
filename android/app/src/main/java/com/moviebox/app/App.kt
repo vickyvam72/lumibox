@@ -7,6 +7,7 @@ import com.moviebox.app.data.Library
 import com.moviebox.app.data.Native
 import com.moviebox.app.data.Repo
 import com.moviebox.app.data.Resolver
+import com.moviebox.app.data.Tmdb
 
 class App : Application() {
     override fun onCreate() {
@@ -17,6 +18,7 @@ class App : Application() {
         Library.init(this)
         Addon.init(this)
         Resolver.init(this)
+        Tmdb.init(this)
         // Siapkan token/sesi MovieBox di latar supaya putar pertama lebih cepat.
         Repo.warmup()
     }
