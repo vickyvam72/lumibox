@@ -62,10 +62,16 @@ class GenreViewModel(private val label: String, private val type: String) : View
         viewModelScope.launch {
             try {
                 val next = page + 1
-                val movies = if (type != "series") async { runCatching { MovieBoxWeb.filter(MovieBoxWeb.TAB_MOVIES, genre, page = next) }.getOrDefault(emptyList()) } else null
-                val series = if (type != "movie") async { runCatching { MovieBoxWeb.filter(MovieBoxWeb.TAB_SERIES, genre, page = next) }.getOrDefault(emptyList()) } else null
-                val m = movies?.await().orEmpty()
-                val s = series?.await().orEmpty()
+                val movies = async {
+                    if (type == "series") emptyList<Title>()
+                    else runCatching { MovieBoxWeb.filter(MovieBoxWeb.TAB_MOVIES, genre, page = next) }.getOrDefault(emptyList())
+                }
+                val series = async {
+                    if (type == "movie") emptyList<Title>()
+                    else runCatching { MovieBoxWeb.filter(MovieBoxWeb.TAB_SERIES, genre, page = next) }.getOrDefault(emptyList())
+                }
+                val m = movies.await()
+                val s = series.await()
                 val merged = mutableListOf<Title>()
                 for (i in 0 until maxOf(m.size, s.size)) {
                     m.getOrNull(i)?.let { merged += it }
