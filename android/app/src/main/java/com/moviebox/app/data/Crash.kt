@@ -32,7 +32,7 @@ object Crash {
 
     /**
      * Dipanggil paling awal. Kalau dua pembukaan terakhir gagal (crash / crash native / macet)
-     * sebelum aplikasi sempat stabil (3 kali berturut-turut), cache dibersihkan otomatis — riwayat, Daftar Saya,
+     * sebelum aplikasi sempat stabil (sekali gagal sudah cukup), cache dibersihkan otomatis — riwayat, Daftar Saya,
      * suka/tidak suka, unduhan, dan kunci TMDB tetap aman.
      */
     fun safeStart(context: Context) {
@@ -40,7 +40,7 @@ object Crash {
         val p = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         recordExitReason(app)
         val failed = p.getInt("unstable_starts", 0)
-        if (failed >= 3) {
+        if (failed >= 1) {
             runCatching { clearCaches(app) }
             p.edit().putInt("unstable_starts", 0).putBoolean("recovered", true).commit()
         } else {
