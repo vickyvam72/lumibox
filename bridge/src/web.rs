@@ -306,6 +306,9 @@ impl WebEngine {
 
     /// POST pencarian ke situs web (sama seperti movieboxhd.net).
     async fn web_search(&self, domain: &str, token: &str, keyword: &str, page: usize) -> Result<Value, String> {
+        if host_dead(domain) {
+            return Err("dilewati (domain sedang mati)".to_string());
+        }
         let url = format!("{domain}/wefeed-h5api-bff/subject/search");
         let mut h = HeaderMap::new();
         put(&mut h, "user-agent", WEB_USER_AGENT);
@@ -322,10 +325,13 @@ impl WebEngine {
             .post(&url)
             .headers(h)
             .body(body.to_string())
-            .timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(6))
             .send()
             .await
-            .map_err(|e| short_err(&e).to_string())?;
+            .map_err(|e| {
+                note_error(domain, &e);
+                short_err(&e).to_string()
+            })?;
         let status = resp.status().as_u16();
         if status != 200 {
             return Err(format!("HTTP {status}"));
@@ -390,6 +396,9 @@ impl WebEngine {
         if let Some(c) = self.h5_cookies.lock().await.get(host) {
             return Ok(c.clone());
         }
+        if host_dead(host) {
+            return Err("dilewati".to_string());
+        }
         let url = format!("https://{host}/wefeed-h5-bff/app/get-latest-app-pkgs?app_name=moviebox");
         let resp = self
             .http
@@ -398,10 +407,13 @@ impl WebEngine {
             .header("accept", "application/json")
             .header("x-client-info", r#"{"timezone":"Asia/Jakarta"}"#)
             .header("referer", format!("https://{host}/"))
-            .timeout(Duration::from_secs(6))
+            .timeout(Duration::from_secs(5))
             .send()
             .await
-            .map_err(|e| short_err(&e).to_string())?;
+            .map_err(|e| {
+                note_error(host, &e);
+                short_err(&e).to_string()
+            })?;
         let cookie = resp
             .headers()
             .get_all("set-cookie")
@@ -418,6 +430,9 @@ impl WebEngine {
 
     /// Pencarian situs web resmi (wefeed-h5-bff/web/subject/search).
     async fn h5_search(&self, host: &str, keyword: &str, page: usize) -> Result<Value, String> {
+        if host_dead(host) {
+            return Err("dilewati (domain sedang mati)".to_string());
+        }
         let cookie = self.h5_cookie(host).await.unwrap_or_default();
         let url = format!("https://{host}/wefeed-h5-bff/web/subject/search");
         let body = json!({"keyword": keyword, "page": page, "perPage": 24, "subjectType": 0});
@@ -432,11 +447,14 @@ impl WebEngine {
             .header("referer", format!("https://{host}/"))
             .header("origin", format!("https://{host}"))
             .body(body.to_string())
-            .timeout(Duration::from_secs(7));
+            .timeout(Duration::from_secs(6));
         if !cookie.is_empty() {
             req = req.header("cookie", cookie);
         }
-        let resp = req.send().await.map_err(|e| short_err(&e).to_string())?;
+        let resp = req.send().await.map_err(|e| {
+            note_error(host, &e);
+            short_err(&e).to_string()
+        })?;
         let status = resp.status().as_u16();
         if status != 200 {
             return Err(format!("HTTP {status}"));
@@ -481,7 +499,7 @@ impl WebEngine {
         let mut h5_ok = false;
         let mut native_done = false;
         // Batas waktu total supaya layar Cari tidak menunggu lama.
-        let deadline = tokio::time::sleep(Duration::from_secs(10));
+        let deadline = tokio::time::sleep(Duration::from_secs(7));
         tokio::pin!(deadline);
         loop {
             tokio::select! {
@@ -508,7 +526,7 @@ impl WebEngine {
                     }
                 }
                 _ = &mut deadline => {
-                    lines.push("batas waktu 10 detik".to_string());
+                    lines.push("batas waktu 7 detik".to_string());
                     break;
                 }
             }
@@ -724,16 +742,22 @@ impl WebEngine {
         put(&mut h, "authorization", &format!("Bearer {token}"));
 
         let host = domain.trim_start_matches("https://");
+        if host_dead(domain) {
+            return (Vec::new(), format!("web {host}: dilewati (gagal tersambung barusan)"));
+        }
         let resp = match self
             .http
             .get(&play_url)
             .headers(h)
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(7))
             .send()
             .await
         {
             Ok(r) => r,
-            Err(e) => return (Vec::new(), format!("web {host}: gagal ({})", short_err(&e))),
+            Err(e) => {
+                note_error(domain, &e);
+                return (Vec::new(), format!("web {host}: gagal ({})", short_err(&e)));
+            }
         };
         let status = resp.status().as_u16();
         if status != 200 {
@@ -880,6 +904,38 @@ impl WebEngine {
             }
         }
         out
+    }
+}
+
+/// Host yang baru saja gagal tersambung (tidak bisa konek / timeout) dilewati sementara,
+/// supaya cek sumber & pencarian tidak menunggu domain mati sampai batas waktunya setiap kali.
+static DEAD_HOSTS: LazyLock<std::sync::Mutex<HashMap<String, std::time::Instant>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
+const DEAD_FOR: Duration = Duration::from_secs(15 * 60);
+
+fn host_of(url_or_host: &str) -> String {
+    url_or_host
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+pub(crate) fn host_dead(url_or_host: &str) -> bool {
+    let h = host_of(url_or_host);
+    DEAD_HOSTS
+        .lock()
+        .map(|m| m.get(&h).is_some_and(|t| t.elapsed() < DEAD_FOR))
+        .unwrap_or(false)
+}
+
+pub(crate) fn note_error(url_or_host: &str, e: &reqwest::Error) {
+    if e.is_connect() || e.is_timeout() {
+        if let Ok(mut m) = DEAD_HOSTS.lock() {
+            m.insert(host_of(url_or_host), std::time::Instant::now());
+        }
     }
 }
 

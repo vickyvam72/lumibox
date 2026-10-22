@@ -170,6 +170,17 @@ object Resolver {
         list.map { t -> async { t to available(t) } }.map { it.await() }.filter { it.second }.map { it.first }
     }
 
+    // ---- ingat judul yang terbukti ada videonya (tombol Putar langsung muncul saat dibuka lagi)
+    private const val SOURCE_TTL = 12 * 60 * 60 * 1000L
+
+    fun sourceKnown(subjectId: String, s: Int, e: Int): Boolean =
+        System.currentTimeMillis() - prefs.getLong("src:$subjectId:$s:$e", 0L) < SOURCE_TTL
+
+    fun markSource(subjectId: String, s: Int, e: Int, ok: Boolean) {
+        val k = "src:$subjectId:$s:$e"
+        if (ok) prefs.edit().putLong(k, System.currentTimeMillis()).apply() else prefs.edit().remove(k).apply()
+    }
+
     /** Simpan subject yang terbukti bisa diputar. */
     fun remember(t: Title, subjectId: String) {
         cacheKey(t)?.let { prefs.edit().putString(it, subjectId).apply() }

@@ -94,16 +94,22 @@ class DetailViewModel(private val key: String) : ViewModel() {
 
     /** Cek langsung ke MovieBox apakah videonya benar-benar ada (hasilnya dipakai pemutar, jadi Putar juga lebih cepat). */
     private suspend fun checkSource(d: Details, subjectId: String, s: Int, e: Int) {
-        hasSource = null
+        // Pernah terbukti ada videonya (12 jam terakhir) → tombol Putar langsung tampil, cek ulang diam-diam.
+        hasSource = if (Resolver.sourceKnown(subjectId, s, e)) true else null
+        val result = checkSourceNow(d, subjectId, s, e)
+        hasSource = result
+        Resolver.markSource(title.id.ifBlank { subjectId }, s, e, result)
+        if (result && title.id != subjectId) Resolver.markSource(subjectId, s, e, true)
+    }
+
+    private suspend fun checkSourceNow(d: Details, subjectId: String, s: Int, e: Int): Boolean {
         if (d.isShortDrama && !com.moviebox.app.data.ContentFilter.showShortDrama) {
-            hasSource = false
-            return
+            return false
         }
         suspend fun ok(id: String) = runCatching { Repo.streams(id, s, e) }.getOrNull().orEmpty().isNotEmpty()
         val playId = d.originalSubjectId?.takeIf { it.isNotBlank() } ?: subjectId
         if (ok(playId) || (playId != subjectId && ok(subjectId))) {
-            hasSource = true
-            return
+            return true
         }
         // Entri ini kosong → coba entri lain dengan judul sama (seperti di pemutar)
         val named = title.copy(title = title.title.ifBlank { d.title })
@@ -116,11 +122,10 @@ class DetailViewModel(private val key: String) : ViewModel() {
                 Resolver.remember(title, alt)
                 title = title.copy(id = alt)
                 details = ad
-                hasSource = true
-                return
+                return true
             }
         }
-        hasSource = false
+        return false
     }
 
     fun recheck() {
