@@ -24,12 +24,17 @@ object Library {
     private val likedGenres = mutableMapOf<String, Int>()
     val myList = mutableStateListOf<Title>()
 
+    /** Judul yang disukai (terbaru di depan) — bahan "Rekomendasi untukmu". */
+    val likedTitles = mutableStateListOf<Title>()
+
     fun init(context: Context) {
         prefs = context.getSharedPreferences("lumibox_library", Context.MODE_PRIVATE)
         history.clear()
         history.addAll(readHistory())
         myList.clear()
         myList.addAll(readList())
+        likedTitles.clear()
+        likedTitles.addAll(readList("liked_titles"))
         watched.clear()
         watched.addAll(readHistory("watched"))
         if (watched.isEmpty() && history.isNotEmpty()) watched.addAll(history)
@@ -85,6 +90,10 @@ object Library {
         val keys = tasteKeys(t)
         val old = taste(t)
         keys.forEach { if (value == 0) likes.remove(it) else likes[it] = value }
+        likedTitles.removeAll { it.key == t.key }
+        if (value > 0) likedTitles.add(0, if (t.genres.isEmpty()) t.copy(genres = genres) else t)
+        while (likedTitles.size > 60) likedTitles.removeAt(likedTitles.lastIndex)
+        persistList("liked_titles", likedTitles)
         // genre yang disukai/tidak disukai ikut diingat
         genres.forEach { g ->
             val delta = value - old
@@ -97,6 +106,9 @@ object Library {
     }
 
     fun isDisliked(t: Title): Boolean = taste(t) < 0
+
+    /** Genre favorit (urut dari yang paling disukai). */
+    fun topGenres(): List<String> = likedGenres.filter { it.value > 0 }.entries.sortedByDescending { it.value }.map { it.key }
 
     /** Skor ketertarikan dari genre yang pernah disukai/tidak disukai. */
     fun affinity(t: Title): Int = t.genres.sumOf { likedGenres[it] ?: 0 } + taste(t) * 5
@@ -156,9 +168,9 @@ object Library {
         }
     }.getOrDefault(emptyList())
 
-    private fun persistList() {
+    private fun persistList(key: String = "my_list", list: List<Title> = myList) {
         val arr = JSONArray()
-        myList.forEach { t ->
+        list.forEach { t ->
             arr.put(
                 JSONObject()
                     .put("id", t.id)
@@ -171,14 +183,15 @@ object Library {
                     .put("logo", t.logo ?: JSONObject.NULL)
                     .put("rating", t.rating ?: JSONObject.NULL)
                     .put("description", t.description ?: JSONObject.NULL)
-                    .put("genres", JSONArray(t.genres)),
+                    .put("genres", JSONArray(t.genres))
+                    .put("tmdbId", t.tmdbId ?: JSONObject.NULL),
             )
         }
-        prefs.edit().putString("my_list", arr.toString()).apply()
+        prefs.edit().putString(key, arr.toString()).apply()
     }
 
-    private fun readList(): List<Title> = runCatching {
-        val arr = JSONArray(prefs.getString("my_list", "[]"))
+    private fun readList(key: String = "my_list"): List<Title> = runCatching {
+        val arr = JSONArray(prefs.getString(key, "[]"))
         arr.objects().map { o ->
             Title(
                 id = o.getString("id"),
@@ -192,6 +205,7 @@ object Library {
                 rating = o.str("rating"),
                 description = o.str("description"),
                 genres = o.optJSONArray("genres").strings(),
+                tmdbId = o.str("tmdbId"),
             )
         }
     }.getOrDefault(emptyList())

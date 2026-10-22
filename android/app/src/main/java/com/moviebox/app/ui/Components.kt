@@ -143,19 +143,54 @@ fun Poster(
                 fontWeight = FontWeight.Bold,
             )
         }
-        if (item.isSeries) {
-            Text(
-                "SERIAL",
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    .fillMaxWidth()
-                    .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.85f))))
-                    .padding(start = 6.dp, top = 10.dp, bottom = 4.dp),
-                color = Accent,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 1.sp,
-            )
+        // Bawah: genre · rating usia · tahun · durasi (seperti di halaman info)
+        val info = mergeInfo(item, tmdb, null, null)
+        Column(
+            Modifier
+                .align(Alignment.BottomStart)
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.55f), Color.Black.copy(alpha = 0.92f))))
+                .padding(start = 5.dp, end = 5.dp, top = 18.dp, bottom = 4.dp),
+        ) {
+            val genres = info.genres.take(2).joinToString(" • ")
+            if (genres.isNotBlank()) {
+                Text(
+                    genres,
+                    color = Color.White,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 11.sp,
+                )
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                info.ageRating?.let { age ->
+                    Text(
+                        age,
+                        modifier = Modifier
+                            .border(0.8.dp, Color.White.copy(alpha = 0.8f), RoundedCornerShape(2.dp))
+                            .padding(horizontal = 2.dp),
+                        color = Color.White,
+                        fontSize = 8.sp,
+                        lineHeight = 10.sp,
+                    )
+                    Spacer(Modifier.width(3.dp))
+                }
+                val rest = buildList {
+                    info.year?.let { add(it) }
+                    if (item.isSeries) add("Serial")
+                    else info.runtimeMin?.let { m -> add(if (m >= 60) "${m / 60}j ${m % 60}m" else "${m}m") }
+                }.joinToString(" • ")
+                Text(
+                    rest,
+                    color = if (item.isSeries) AccentLight else Color.White.copy(alpha = 0.85f),
+                    fontSize = 8.5.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 10.sp,
+                )
+            }
         }
     }
 }

@@ -174,8 +174,14 @@ class PlayerActivity : ComponentActivity() {
             .build()
         player = ExoPlayer.Builder(this).setLoadControl(loadControl).build()
         player.addListener(listener)
+        com.moviebox.app.data.Together.player = togetherHook
 
-        setContent { LumiTheme { PlayerScreen() } }
+        setContent {
+            LumiTheme {
+                PlayerScreen()
+                com.moviebox.app.ui.TogetherDialog()
+            }
+        }
 
         loadEpisode(
             intent.getIntExtra(EXTRA_SEASON, 0),
@@ -613,9 +619,38 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        if (com.moviebox.app.data.Together.player === togetherHook) com.moviebox.app.data.Together.player = null
         loadJob?.cancel()
         if (::player.isInitialized) player.release()
         super.onDestroy()
+    }
+
+    // ================================================================== Nonton Bareng
+
+    private val togetherHook = object : com.moviebox.app.data.TogetherPlayer {
+        override val exo: ExoPlayer get() = player
+        override val loading: Boolean get() = loadingMessage != null || errorMessage != null
+        override fun content(): com.moviebox.app.data.TogetherContent? {
+            if (subjectId.isBlank()) return null
+            return com.moviebox.app.data.TogetherContent(
+                subjectId = subjectId,
+                title = title.title.ifBlank { details?.title ?: "" },
+                poster = title.poster ?: details?.poster,
+                isSeries = title.isSeries,
+                season = season,
+                episode = episode,
+            )
+        }
+        override fun switchTo(c: com.moviebox.app.data.TogetherContent) {
+            if (c.subjectId == subjectId && intent.getStringExtra(EXTRA_LOCAL) == null) {
+                saveProgress()
+                loadEpisode(c.season, c.episode, resume = false)
+            } else {
+                saveProgress()
+                com.moviebox.app.data.Together.opener?.invoke(c)
+                finish()
+            }
+        }
     }
 
     private fun showError(message: String) {
@@ -817,6 +852,7 @@ class PlayerActivity : ComponentActivity() {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                com.moviebox.app.ui.TogetherButton(28.dp)
                 IconButton(onClick = onLock) {
                     Icon(PlayerIcons.LockOpen, contentDescription = "Kunci layar", tint = Color.White, modifier = Modifier.size(28.dp))
                 }

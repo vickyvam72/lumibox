@@ -101,27 +101,58 @@ object Tmdb {
         val out = mutableListOf<Title>()
         for (page in 1..2) {
             params["page"] = page.toString()
-            val results = runCatching { get("/discover/$type", params) }.getOrNull()
-                ?.optJSONArray("results").objects()
-            results.forEach { r ->
-                val poster = r.str("poster_path") ?: return@forEach
-                val name = r.str("title") ?: r.str("name") ?: return@forEach
-                val date = r.str("release_date") ?: r.str("first_air_date")
-                val vote = r.optDouble("vote_average", 0.0)
-                out += Title(
-                    id = "",
-                    title = name,
-                    isSeries = series,
-                    year = date?.take(4),
-                    poster = "$IMG/w500$poster",
-                    backdrop = r.str("backdrop_path")?.let { "$IMG/w1280$it" },
-                    rating = if (vote > 0) "%.1f".format(java.util.Locale.US, vote) else null,
-                    description = r.str("overview"),
-                    tmdbId = r.opt("id")?.toString(),
-                )
-            }
+            out += parseResults(runCatching { get("/discover/$type", params) }.getOrNull(), series)
         }
         out.distinctBy { it.key }
+    }
+
+    private fun parseResults(json: JSONObject?, series: Boolean?): List<Title> =
+        json?.optJSONArray("results").objects().mapNotNull { r ->
+            val isSeries = series ?: (r.str("media_type") == "tv")
+            val poster = r.str("poster_path") ?: return@mapNotNull null
+            val name = r.str("title") ?: r.str("name") ?: return@mapNotNull null
+            val date = r.str("release_date") ?: r.str("first_air_date")
+            val vote = r.optDouble("vote_average", 0.0)
+            val genreIds = r.optJSONArray("genre_ids")?.let { a -> (0 until a.length()).map { a.opt(it).toString() } }.orEmpty()
+            Title(
+                id = "",
+                title = name,
+                isSeries = isSeries,
+                year = date?.take(4),
+                poster = "$IMG/w500$poster",
+                backdrop = r.str("backdrop_path")?.let { "$IMG/w1280$it" },
+                rating = if (vote > 0) "%.1f".format(java.util.Locale.US, vote) else null,
+                description = r.str("overview"),
+                genres = Genres.normalize(genreIds),
+                tmdbId = r.opt("id")?.toString(),
+            )
+        }
+
+    /** Judul per genre (populer, cukup banyak penilaian) — supaya isi kategori sesuai genrenya. */
+    suspend fun byGenre(label: String, series: Boolean, page: Int): List<Title> = withContext(Dispatchers.IO) {
+        if (!enabled) return@withContext emptyList()
+        val ids = Genres.tmdbFor(label, series) ?: return@withContext emptyList()
+        val params = mutableMapOf(
+            "language" to "id-ID",
+            "sort_by" to "popularity.desc",
+            "include_adult" to "false",
+            "vote_count.gte" to if (series) "30" else "80",
+            "with_genres" to ids,
+            "page" to page.toString(),
+        )
+        if (label == "Anime") params["with_original_language"] = "ja"
+        if (label == "Animasi") params["without_original_language"] = "ja"
+        parseResults(runCatching { get("/discover/${if (series) "tv" else "movie"}", params) }.getOrNull(), series)
+    }
+
+    /** Rekomendasi TMDB dari satu judul yang disukai. */
+    suspend fun recommendations(t: Title): List<Title> = withContext(Dispatchers.IO) {
+        if (!enabled) return@withContext emptyList()
+        val type = if (t.isSeries) "tv" else "movie"
+        runCatching {
+            val id = findId(t, type) ?: return@runCatching emptyList()
+            parseResults(get("/$type/$id/recommendations", mapOf("language" to "id-ID")), t.isSeries)
+        }.getOrDefault(emptyList())
     }
 
     private fun load(t: Title): TmdbInfo? {

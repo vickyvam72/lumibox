@@ -72,6 +72,7 @@ import com.moviebox.app.data.MovieBoxWeb
 import com.moviebox.app.data.Repo
 import com.moviebox.app.data.Section
 import com.moviebox.app.data.Title
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -85,6 +86,8 @@ data class HomeRow(
     val local: Boolean,
     val catalog: AddonCatalog? = null,
 )
+
+const val MIN_LIKES = 3
 
 class HomeViewModel : ViewModel() {
     var catalogs by mutableStateOf<List<AddonCatalog>>(emptyList())
@@ -146,6 +149,45 @@ class HomeViewModel : ViewModel() {
     }
 
     val failedRows = mutableStateMapOf<String, Boolean>()
+
+    // ---- Rekomendasi untukmu (muncul setelah menyukai beberapa judul) ----
+    var recommended by mutableStateOf<List<Title>>(emptyList())
+        private set
+    private var recoSignature = ""
+
+    fun loadRecommendations() {
+        val liked = Library.likedTitles.toList()
+        if (liked.size < MIN_LIKES) {
+            recommended = emptyList()
+            return
+        }
+        val signature = liked.take(8).joinToString("|") { it.key } + "#" + rows.size
+        if (signature == recoSignature) return
+        recoSignature = signature
+        viewModelScope.launch {
+            // 1) TMDB: "rekomendasi" dari judul yang paling baru disukai
+            val tmdbLists = if (com.moviebox.app.data.Tmdb.enabled) {
+                liked.take(6).map { t ->
+                    async { com.moviebox.app.data.Tmdb.recommendations(t) }
+                }.map { it.await() }
+            } else emptyList()
+            val fromTmdb = mutableListOf<Title>()
+            for (i in 0 until 20) tmdbLists.forEach { l -> l.getOrNull(i)?.let { fromTmdb += it } }
+            // 2) Judul di beranda yang genrenya cocok dengan selera
+            val fav = Library.topGenres().take(3)
+            val fromGenres = if (com.moviebox.app.data.Tmdb.enabled && fav.isNotEmpty()) {
+                runCatching { com.moviebox.app.data.Tmdb.byGenre(fav.first(), liked.first().isSeries, 1) }.getOrDefault(emptyList())
+            } else emptyList()
+            val fromRows = rows.values.flatten().filter { Library.affinity(it) > 0 }
+            val likedKeys = liked.map { it.key }.toSet()
+            val likedNames = liked.map { it.title.lowercase() }.toSet()
+            recommended = (fromTmdb + Library.personalize(fromRows) + fromGenres)
+                .filter { it.key !in likedKeys && it.title.lowercase() !in likedNames && Library.taste(it) == 0 }
+                .distinctBy { it.key }
+                .distinctBy { it.title.lowercase() }
+                .take(30)
+        }
+    }
 
     fun loadRow(r: HomeRow, force: Boolean = false) {
         if ((!force && rows.containsKey(r.key)) || !loadingRows.add(r.key)) return
@@ -239,6 +281,11 @@ fun HomeScreen(
     onGenre: (Genre) -> Unit,
 ) {
     val heroItems = vm.heroItems()
+    val likedCount = Library.likedTitles.size
+    val loadedRows = vm.rows.size
+    androidx.compose.runtime.LaunchedEffect(likedCount, Library.likedTitles.firstOrNull()?.key, loadedRows) {
+        vm.loadRecommendations()
+    }
     val main = vm.mainRows().filter(vm::keepRow)
     var showGenres by remember { mutableStateOf(false) }
 
@@ -280,6 +327,18 @@ fun HomeScreen(
 
             if (Library.history.isNotEmpty() && vm.filter == HomeFilter.ALL) {
                 item(key = "continue") { ContinueRow(onPlayEntry = onPlay, onDetails = onDetails) }
+            }
+
+            // Rekomendasi untukmu: di atas Film Lokal, setelah menyukai beberapa judul
+            val reco = vm.recommended.filter {
+                when (vm.filter) {
+                    HomeFilter.ALL -> true
+                    HomeFilter.SERIES -> it.isSeries
+                    HomeFilter.MOVIES -> !it.isSeries
+                }
+            }
+            if (Library.likedTitles.size >= MIN_LIKES && reco.isNotEmpty()) {
+                item(key = "reco") { TitleRow("Rekomendasi untukmu", reco, onOpen, onDetails) }
             }
 
             // Hanya 4 kategori: Film Lokal, Serial Lokal, Film Global, Serial Global
@@ -364,6 +423,7 @@ private fun TopBar(onRefresh: () -> Unit) {
             color = Color.White,
             modifier = Modifier.weight(1f),
         )
+        TogetherButton()
         IconButton(onClick = onRefresh) {
             Icon(Icons.Default.Refresh, contentDescription = "Muat ulang", tint = Color.White)
         }

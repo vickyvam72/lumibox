@@ -63,10 +63,20 @@ class MainActivity : ComponentActivity() {
             statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.BLACK),
         )
+        // Nonton Bareng: anggota otomatis membuka tontonan yang diputar host.
+        com.moviebox.app.data.Together.opener = { c ->
+            PlayerActivity.start(
+                this,
+                Title(id = c.subjectId, title = c.title, isSeries = c.isSeries, year = null, poster = c.poster),
+                c.season,
+                c.episode,
+            )
+        }
         setContent {
             LumiTheme {
                 LumiApp()
                 CrashReportDialog()
+                com.moviebox.app.ui.TogetherDialog()
             }
         }
     }

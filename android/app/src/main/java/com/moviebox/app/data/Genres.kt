@@ -29,6 +29,20 @@ object Genres {
 
     fun byLabel(label: String): Genre? = all.firstOrNull { it.label == label }
 
+    /** ID genre TMDB untuk discover (film / serial). "," = semua, "|" = salah satu. */
+    fun tmdbFor(label: String, series: Boolean): String? = if (!series) when (label) {
+        "Aksi" -> "28"; "Petualangan" -> "12"; "Animasi", "Anime" -> "16"; "Komedi" -> "35"
+        "Kriminal" -> "80"; "Dokumenter" -> "99"; "Drama" -> "18"; "Keluarga" -> "10751"
+        "Fantasi" -> "14"; "Sejarah" -> "36"; "Horor" -> "27"; "Musik" -> "10402"
+        "Misteri" -> "9648"; "Romantis" -> "10749"; "Fiksi Ilmiah" -> "878"; "Thriller" -> "53"
+        "Perang" -> "10752"; "Western" -> "37"; else -> null
+    } else when (label) {
+        "Aksi", "Petualangan" -> "10759"; "Animasi", "Anime" -> "16"; "Komedi" -> "35"
+        "Kriminal" -> "80"; "Dokumenter" -> "99"; "Drama" -> "18"; "Keluarga" -> "10751|10762"
+        "Fantasi", "Fiksi Ilmiah" -> "10765"; "Misteri", "Horor" -> "9648"; "Thriller" -> "80|9648"
+        "Perang", "Sejarah" -> "10768"; "Western" -> "37"; "Romantis" -> "18"; else -> null
+    }
+
     /** ID genre TMDB (dipakai addon Catalog Plus) → nama Indonesia. */
     private val tmdbIds = mapOf(
         "28" to "Aksi", "12" to "Petualangan", "16" to "Animasi", "35" to "Komedi",

@@ -62,16 +62,22 @@ class GenreViewModel(private val label: String, private val type: String) : View
         viewModelScope.launch {
             try {
                 val next = page + 1
-                val movies = async {
-                    if (type == "series") emptyList<Title>()
-                    else runCatching { MovieBoxWeb.filter(MovieBoxWeb.TAB_MOVIES, genre, page = next) }.getOrDefault(emptyList())
+                // TMDB (kalau ada kunci): isi benar-benar sesuai genre. Tanpa kunci: MovieBox,
+                // tapi hanya judul yang genrenya memang cocok (buang video musik/acak).
+                val tmdb = com.moviebox.app.data.Tmdb.enabled
+                suspend fun source(series: Boolean): List<Title> {
+                    if (tmdb) {
+                        val list = runCatching { com.moviebox.app.data.Tmdb.byGenre(label, series, next) }.getOrDefault(emptyList())
+                        if (list.isNotEmpty() || page > 0) return list
+                    }
+                    val tab = if (series) MovieBoxWeb.TAB_SERIES else MovieBoxWeb.TAB_MOVIES
+                    return runCatching { MovieBoxWeb.filter(tab, genre, page = next) }.getOrDefault(emptyList())
+                        .filter { t -> t.genres.any { it.equals(label, true) || it.equals(genre, true) } }
                 }
-                val series = async {
-                    if (type == "movie") emptyList<Title>()
-                    else runCatching { MovieBoxWeb.filter(MovieBoxWeb.TAB_SERIES, genre, page = next) }.getOrDefault(emptyList())
-                }
-                val m = movies.await()
-                val s = series.await()
+                val movies = async { if (type == "series") emptyList() else source(false) }
+                val series = async { if (type == "movie") emptyList() else source(true) }
+                val m = com.moviebox.app.data.Library.personalize(movies.await())
+                val s = com.moviebox.app.data.Library.personalize(series.await())
                 val merged = mutableListOf<Title>()
                 for (i in 0 until maxOf(m.size, s.size)) {
                     m.getOrNull(i)?.let { merged += it }
