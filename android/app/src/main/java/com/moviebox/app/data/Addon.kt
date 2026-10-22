@@ -76,8 +76,26 @@ object Addon {
             // Pakai salinan terakhir kalau sedang offline / server lambat.
             prefs.getString("manifest", null)?.let { JSONObject(it) } ?: throw e
         }
+        val list = parseCatalogs(manifest)
+        catalogsCache = list
+        return list
+    }
+
+    /** Katalog dari salinan tersimpan (instan, tanpa jaringan). */
+    fun storedCatalogs(): List<AddonCatalog> = runCatching {
+        prefs.getString("base", null)?.let { base = it }
+        prefs.getString("manifest", null)?.let { parseCatalogs(JSONObject(it)) }
+    }.getOrNull().orEmpty()
+
+    /** Isi katalog terakhir yang tersimpan (instan, tanpa jaringan). */
+    fun storedCatalog(c: AddonCatalog): List<Title> = runCatching {
+        prefs.getString("cat_${c.key}@0", null)?.let { JSONArray(it) }
+            ?.objects()?.mapNotNull { parseMeta(it, c.type) }?.distinctBy { it.key }
+    }.getOrNull().orEmpty()
+
+    private fun parseCatalogs(manifest: JSONObject): List<AddonCatalog> {
         val hidden = listOf("search", "last-videos", "calendar-videos", "lastvideos", "calendar")
-        val list = manifest.optJSONArray("catalogs").objects().mapNotNull { c ->
+        return manifest.optJSONArray("catalogs").objects().mapNotNull { c ->
             val type = c.str("type") ?: return@mapNotNull null
             val id = c.str("id") ?: return@mapNotNull null
             if (type != "movie" && type != "series") return@mapNotNull null
@@ -86,8 +104,6 @@ object Addon {
             if (required || hidden.any { id.lowercase().contains(it) }) return@mapNotNull null
             AddonCatalog(type, id, c.str("name") ?: id)
         }.distinctBy { it.key }
-        catalogsCache = list
-        return list
     }
 
     fun catalogByKey(key: String): AddonCatalog? = catalogsCache?.firstOrNull { it.key == key }

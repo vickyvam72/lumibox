@@ -15,6 +15,13 @@ object Library {
     private lateinit var prefs: SharedPreferences
 
     val history = mutableStateListOf<HistoryEntry>()
+
+    /** Riwayat tonton permanen (tidak ikut terhapus dari "Lanjutkan Menonton"). */
+    val watched = mutableStateListOf<HistoryEntry>()
+
+    /** Suka / tidak suka untuk menyusun urutan (algoritma) di beranda. */
+    val likes = androidx.compose.runtime.mutableStateMapOf<String, Int>()
+    private val likedGenres = mutableMapOf<String, Int>()
     val myList = mutableStateListOf<Title>()
 
     fun init(context: Context) {
@@ -23,6 +30,16 @@ object Library {
         history.addAll(readHistory())
         myList.clear()
         myList.addAll(readList())
+        watched.clear()
+        watched.addAll(readHistory("watched"))
+        if (watched.isEmpty() && history.isNotEmpty()) watched.addAll(history)
+        likes.clear()
+        runCatching {
+            val o = JSONObject(prefs.getString("likes", "{}") ?: "{}")
+            o.keys().forEach { likes[it] = o.optInt(it) }
+            val g = JSONObject(prefs.getString("liked_genres", "{}") ?: "{}")
+            g.keys().forEach { likedGenres[it] = g.optInt(it) }
+        }
     }
 
     fun entry(id: String): HistoryEntry? = history.firstOrNull { it.id == id }
@@ -32,7 +49,61 @@ object Library {
         history.add(0, entry)
         while (history.size > 40) history.removeAt(history.lastIndex)
         persistHistory()
+        addWatched(entry)
     }
+
+    /** Catat ke riwayat tonton (langsung saat video mulai diputar). */
+    fun addWatched(entry: HistoryEntry) {
+        watched.removeAll { it.id == entry.id }
+        watched.add(0, entry)
+        while (watched.size > 300) watched.removeAt(watched.lastIndex)
+        persistHistory("watched", watched)
+    }
+
+    fun removeWatched(id: String) {
+        if (watched.removeAll { it.id == id }) persistHistory("watched", watched)
+    }
+
+    fun clearWatched() {
+        watched.clear()
+        persistHistory("watched", watched)
+    }
+
+    // ---- suka / tidak suka ----
+
+    private fun tasteKeys(t: Title): List<String> = listOfNotNull(
+        t.id.takeIf { it.isNotBlank() },
+        t.imdbId,
+        t.tmdbId?.let { "tmdb$it" },
+        t.title.lowercase().trim().takeIf { it.isNotBlank() }?.let { "t:$it" },
+    )
+
+    /** 1 = suka, -1 = tidak suka, 0 = belum dinilai. */
+    fun taste(t: Title): Int = tasteKeys(t).firstNotNullOfOrNull { likes[it] } ?: 0
+
+    fun rate(t: Title, value: Int, genres: List<String>) {
+        val keys = tasteKeys(t)
+        val old = taste(t)
+        keys.forEach { if (value == 0) likes.remove(it) else likes[it] = value }
+        // genre yang disukai/tidak disukai ikut diingat
+        genres.forEach { g ->
+            val delta = value - old
+            likedGenres[g] = (likedGenres[g] ?: 0) + delta
+        }
+        prefs.edit()
+            .putString("likes", JSONObject(likes.toMap() as Map<*, *>).toString())
+            .putString("liked_genres", JSONObject(likedGenres as Map<*, *>).toString())
+            .apply()
+    }
+
+    fun isDisliked(t: Title): Boolean = taste(t) < 0
+
+    /** Skor ketertarikan dari genre yang pernah disukai/tidak disukai. */
+    fun affinity(t: Title): Int = t.genres.sumOf { likedGenres[it] ?: 0 } + taste(t) * 5
+
+    /** Urutkan ulang daftar sesuai selera (stabil: urutan "terbaru" tetap untuk yang setara). */
+    fun personalize(items: List<Title>): List<Title> =
+        items.filterNot(::isDisliked).sortedByDescending(::affinity)
 
     fun removeHistory(id: String) {
         if (history.removeAll { it.id == id }) persistHistory()
@@ -47,9 +118,9 @@ object Library {
 
     // ---- penyimpanan ----
 
-    private fun persistHistory() {
+    private fun persistHistory(key: String = "history", list: List<HistoryEntry> = history) {
         val arr = JSONArray()
-        history.forEach { h ->
+        list.forEach { h ->
             arr.put(
                 JSONObject()
                     .put("id", h.id)
@@ -64,11 +135,11 @@ object Library {
                     .put("imdbId", h.imdbId ?: JSONObject.NULL),
             )
         }
-        prefs.edit().putString("history", arr.toString()).apply()
+        prefs.edit().putString(key, arr.toString()).apply()
     }
 
-    private fun readHistory(): List<HistoryEntry> = runCatching {
-        val arr = JSONArray(prefs.getString("history", "[]"))
+    private fun readHistory(key: String = "history"): List<HistoryEntry> = runCatching {
+        val arr = JSONArray(prefs.getString(key, "[]"))
         arr.objects().map { o ->
             HistoryEntry(
                 id = o.getString("id"),

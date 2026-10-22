@@ -41,6 +41,9 @@ import com.moviebox.app.data.Resolver
 import com.moviebox.app.data.Title
 import com.moviebox.app.data.TitleStore
 import com.moviebox.app.ui.GenreScreen
+import com.moviebox.app.ui.HistoryScreen
+import com.moviebox.app.ui.DownloadsScreen
+import com.moviebox.app.ui.SettingsScreen
 import com.moviebox.app.ui.HomeFilter
 import com.moviebox.app.ui.Accent
 import com.moviebox.app.ui.Background
@@ -100,10 +103,8 @@ private fun LumiApp() {
     val details: (Title) -> Unit = { item ->
         nav.navigate("details/${Uri.encode(TitleStore.put(item))}")
     }
-    // Film → langsung putar. Serial → halaman detail (pilih episode).
-    val open: (Title) -> Unit = { item ->
-        if (item.isSeries) details(item) else playTitle(context, item)
-    }
+    // Ketuk judul → halaman informasi dulu; diputar lewat tombol "Putar".
+    val open: (Title) -> Unit = details
     val play: (Title) -> Unit = { item -> playTitle(context, item) }
     val genre: (Genre) -> Unit = { g ->
         val type = when (homeVm.filter) {
@@ -131,7 +132,26 @@ private fun LumiApp() {
                     SearchScreen(suggestions = homeVm.allTitles(), onOpen = open, onDetails = details)
                 }
                 composable(Tab.MINE.route) {
-                    MyScreen(onOpen = open, onPlay = play, onDetails = details)
+                    MyScreen(
+                        onOpen = open,
+                        onPlay = play,
+                        onDetails = details,
+                        onHistory = { nav.navigate("history") },
+                        onDownloads = { nav.navigate("downloads") },
+                        onSettings = { nav.navigate("settings") },
+                    )
+                }
+                composable("history") {
+                    HistoryScreen(onBack = { nav.popBackStack() }, onPlay = details)
+                }
+                composable("downloads") {
+                    DownloadsScreen(
+                        onBack = { nav.popBackStack() },
+                        onPlayOffline = { PlayerActivity.startOffline(context, it) },
+                    )
+                }
+                composable("settings") {
+                    SettingsScreen(onBack = { nav.popBackStack() })
                 }
                 composable(
                     route = "details/{key}",

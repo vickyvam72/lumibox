@@ -1,6 +1,9 @@
 package com.moviebox.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -30,9 +33,16 @@ import kotlinx.coroutines.launch
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 
-/** Tab "Lumi Saya": Lanjutkan Menonton + Daftar Saya. */
+/** Tab "Lumi Saya": tombol History · Unduhan · Setting, lalu Lanjutkan Menonton & Daftar Saya. */
 @Composable
-fun MyScreen(onOpen: (Title) -> Unit, onPlay: (Title) -> Unit, onDetails: (Title) -> Unit) {
+fun MyScreen(
+    onOpen: (Title) -> Unit,
+    onPlay: (Title) -> Unit,
+    onDetails: (Title) -> Unit,
+    onHistory: () -> Unit,
+    onDownloads: () -> Unit,
+    onSettings: () -> Unit,
+) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -59,14 +69,23 @@ fun MyScreen(onOpen: (Title) -> Unit, onPlay: (Title) -> Unit, onDetails: (Title
         }
 
         item {
+            Row(
+                Modifier.padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                MenuTile(PlayerIcons.History, "History", Modifier.weight(1f), onHistory)
+                MenuTile(PlayerIcons.Download, "Unduhan", Modifier.weight(1f), onDownloads)
+                MenuTile(androidx.compose.material.icons.Icons.Default.Settings, "Setting", Modifier.weight(1f), onSettings)
+            }
+        }
+
+        item {
             if (Library.history.isEmpty()) {
                 EmptyCard("Lanjutkan Menonton", "Film dan serial yang kamu tonton akan muncul di sini.")
             } else {
                 ContinueRow(onPlayEntry = onPlay, onDetails = onDetails)
             }
         }
-
-        item { TmdbCard() }
 
         item {
             val list = Library.myList.toList()
@@ -79,13 +98,34 @@ fun MyScreen(onOpen: (Title) -> Unit, onPlay: (Title) -> Unit, onDetails: (Title
                         contentPadding = PaddingValues(horizontal = 16.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        items(list, key = { it.key }) { item ->
+                        items(list.distinctBy { it.key }, key = { it.key }) { item ->
                             Poster(item, onClick = { onOpen(item) }, onLongClick = { onDetails(item) })
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun MenuTile(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    modifier: Modifier,
+    onClick: () -> Unit,
+) {
+    Column(
+        modifier
+            .background(Surface1, RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        androidx.compose.material3.Icon(icon, contentDescription = null, tint = Accent, modifier = Modifier.size(28.dp))
+        Spacer(Modifier.padding(top = 6.dp))
+        Text(label, color = Color.White, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -106,7 +146,7 @@ private fun EmptyCard(title: String, message: String) {
 
 /** Pengaturan kunci TMDB (poster & deskripsi Indonesia → Inggris → asli, genre, skor, rating usia). */
 @Composable
-private fun TmdbCard() {
+fun TmdbCard() {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var text by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(Tmdb.apiKey) }
     var status by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf<String?>(null) }

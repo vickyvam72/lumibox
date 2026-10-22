@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -28,6 +29,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -37,6 +39,8 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,23 +63,15 @@ fun LumiLogo(size: Dp = 34.dp) {
     Box(
         Modifier
             .size(size)
-            .clip(RoundedCornerShape(size / 4))
-            .background(Brush.linearGradient(listOf(AccentLight, AccentDeep))),
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(Brush.linearGradient(listOf(AccentLight, Color(0xFF4A9CF5), AccentDeep))),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            "L",
-            color = Color.White,
-            fontWeight = FontWeight.Black,
-            fontSize = (size.value * 0.6f).sp,
-        )
-        Text(
-            "✦",
-            color = Color.White,
-            fontSize = (size.value * 0.28f).sp,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(end = size / 9, top = size / 18),
+        // Ikon depan launcher (108dp, area terlihat 72dp) → skala 1.5x lalu dipotong lingkaran.
+        androidx.compose.foundation.Image(
+            painter = androidx.compose.ui.res.painterResource(com.moviebox.app.R.drawable.ic_launcher_foreground),
+            contentDescription = "Lumi Box",
+            modifier = Modifier.requiredSize(size * 1.5f),
         )
     }
 }
@@ -91,12 +87,25 @@ fun Poster(
     rank: Int? = null,
 ) {
     val base = if (width != null) modifier.width(width) else modifier.fillMaxWidth()
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var menu by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    if (menu) {
+        TitleActionsSheet(
+            title = item,
+            onDismiss = { menu = false },
+            onInfo = onLongClick,
+            onDownload = {
+                if (item.isSeries) onLongClick() else startDownload(context, scope, item, 0, 0)
+            },
+        )
+    }
     Box(
         base
             .aspectRatio(2f / 3f)
             .clip(RoundedCornerShape(6.dp))
             .background(Surface2)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
+            .combinedClickable(onClick = onClick, onLongClick = { menu = true }),
     ) {
         // Judul sebagai cadangan kalau gambar gagal dimuat.
         Text(
@@ -112,7 +121,7 @@ fun Poster(
         )
         val tmdb = rememberTmdb(item)
         AsyncImage(
-            model = tmdb?.poster ?: item.poster,
+            model = tmdb?.poster ?: cleanPoster(item.poster, item.imdbId),
             contentDescription = item.title,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
@@ -212,6 +221,19 @@ fun ContinueCard(
     onInfo: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var menu by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val tmdb = rememberTmdb(entry.asTitle())
+    if (menu) {
+        TitleActionsSheet(
+            title = entry.asTitle(),
+            onDismiss = { menu = false },
+            onInfo = onInfo,
+            onDownload = { startDownload(context, scope, entry.asTitle(), entry.season, entry.episode) },
+            onRemove = onRemove,
+        )
+    }
     Column(
         Modifier
             .width(128.dp)
@@ -226,7 +248,7 @@ fun ContinueCard(
                 .clickable(onClick = onPlay),
         ) {
             AsyncImage(
-                model = entry.poster,
+                model = tmdb?.poster ?: cleanPoster(entry.poster, entry.imdbId),
                 contentDescription = entry.title,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -273,8 +295,8 @@ fun ContinueCard(
                     .padding(vertical = 10.dp)
                     .background(Color(0xFF444444)),
             )
-            IconButton(onClick = onRemove, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.Close, contentDescription = "Hapus", tint = Color.White)
+            IconButton(onClick = { menu = true }, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Default.MoreVert, contentDescription = "Lainnya", tint = Color.White)
             }
         }
     }
@@ -368,4 +390,12 @@ fun ErrorBox(message: String, onRetry: () -> Unit, modifier: Modifier = Modifier
         Text(message, textAlign = TextAlign.Center, color = TextDim)
         PlayButton("Coba lagi", onClick = onRetry)
     }
+}
+
+/** Poster tanpa badge rating: kalau poster lama dari EasyRatings, ganti dengan poster bersih (metahub). */
+fun cleanPoster(poster: String?, imdbId: String?): String? {
+    if (poster != null && poster.contains("easyratingsdb", ignoreCase = true) && imdbId != null && imdbId.startsWith("tt")) {
+        return "https://images.metahub.space/poster/medium/$imdbId/img"
+    }
+    return poster
 }

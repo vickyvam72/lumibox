@@ -115,10 +115,18 @@ class HomeViewModel : ViewModel() {
 
     private fun loadCatalogs() {
         catalogsLoading = true
-        viewModelScope.launch {
-            catalogs = runCatching { Addon.catalogs() }.getOrDefault(emptyList())
+        // Tampilkan salinan tersimpan dulu (instan), lalu perbarui dari jaringan.
+        val stored = Addon.storedCatalogs()
+        if (stored.isNotEmpty()) {
+            catalogs = stored
             catalogsLoading = false
-            mainRows().forEach { loadRow(it) }
+            mainRows().forEach { r -> r.catalog?.let { c -> Addon.storedCatalog(c).takeIf { it.isNotEmpty() }?.let { rows[r.key] = it } } }
+        }
+        viewModelScope.launch {
+            val fresh = runCatching { Addon.catalogs() }.getOrDefault(emptyList())
+            if (fresh.isNotEmpty() || catalogs.isEmpty()) catalogs = fresh
+            catalogsLoading = false
+            mainRows().forEach { loadRow(it, force = rows.containsKey(it.key)) }
         }
     }
 
@@ -148,7 +156,8 @@ class HomeViewModel : ViewModel() {
                 // Cadangan yang tetap relevan: TMDB rilis terbaru (butuh kunci TMDB).
                 items = runCatching { com.moviebox.app.data.Tmdb.latest(r.isSeries, r.local) }.getOrDefault(emptyList())
             }
-            if (items.isEmpty()) failedRows[r.key] = true else rows[r.key] = items
+            if (items.isNotEmpty()) rows[r.key] = items
+            else if (rows[r.key].isNullOrEmpty()) failedRows[r.key] = true
             loadingRows.remove(r.key)
         }
     }
@@ -211,7 +220,7 @@ class HomeViewModel : ViewModel() {
 
     /** Isi carousel: selang-seling dari 4 kategori utama. */
     fun heroItems(): List<Title> {
-        val lists = mainRows().filter(::keepRow).map { rows[it.key].orEmpty().take(3) }
+        val lists = mainRows().filter(::keepRow).map { Library.personalize(rows[it.key].orEmpty()).take(3) }
         val out = mutableListOf<Title>()
         for (i in 0 until 3) lists.forEach { l -> l.getOrNull(i)?.let { out += it } }
         return out.distinctBy { it.key }.take(10)
@@ -299,7 +308,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.rowItem(
         LaunchedEffect(r.key, vm.catalogsLoading) { if (!vm.catalogsLoading) vm.loadRow(r) }
         val items = vm.rows[r.key]
         when {
-            items != null && items.isNotEmpty() -> TitleRow(r.title, items, onOpen, onDetails)
+            items != null && items.isNotEmpty() -> TitleRow(r.title, Library.personalize(items), onOpen, onDetails)
             vm.failedRows[r.key] == true -> Column {
                 SectionTitle(r.title)
                 Text(

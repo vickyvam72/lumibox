@@ -78,7 +78,8 @@ class GenreViewModel(private val label: String, private val type: String) : View
                     s.getOrNull(i)?.let { merged += it }
                 }
                 val known = items.map { it.key }.toSet()
-                val fresh = merged.filter { it.key !in known }
+                // satu judul bisa muncul di daftar film & serial atau di dua halaman → buang duplikat
+                val fresh = merged.distinctBy { it.key }.filter { it.key !in known }
                 if (fresh.isEmpty()) {
                     endReached = true
                     if (items.isEmpty()) error = "Belum ada judul untuk genre ini."
@@ -134,7 +135,7 @@ fun GenreScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    items(vm.items, key = { it.key }) { item ->
+                    items(vm.items.distinctBy { it.key }, key = { it.key }) { item ->
                         Poster(item, onClick = { onOpen(item) }, onLongClick = { onDetails(item) }, width = null)
                     }
                     if (!vm.endReached) {

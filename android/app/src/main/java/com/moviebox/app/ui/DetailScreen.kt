@@ -148,6 +148,8 @@ fun DetailScreen(
     val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val watched = d?.let { Library.entry(it.id) }
     val inList = Library.isInList(t.key)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
     val info = mergeInfo(t, rememberTmdb(t.copy(title = t.title.ifBlank { d?.title ?: "" }, year = t.year ?: d?.year, isSeries = d?.isSeries ?: t.isSeries)), vm.meta, d)
 
     Box(
@@ -204,12 +206,35 @@ fun DetailScreen(
                     }
 
                     Spacer(Modifier.height(8.dp))
-                    GrayButton(
-                        text = if (inList) "Ada di Daftar Saya" else "Daftar Saya",
-                        icon = if (inList) Icons.Default.Check else Icons.Default.Add,
-                        onClick = { Library.toggleList(vm.title.copy(title = vm.title.title.ifBlank { d?.title ?: "" })) },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    val dlTarget = when {
+                        d == null -> null
+                        !d.isSeries -> 0 to 0
+                        watched != null && watched.season > 0 -> watched.season to watched.episode
+                        else -> d.firstEpisode()
+                    }
+                    val downloaded = d != null && dlTarget != null && com.moviebox.app.data.Downloads.find(d.id, dlTarget.first, dlTarget.second) != null
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        GrayButton(
+                            text = if (inList) "Di Daftar" else "Daftar Saya",
+                            icon = if (inList) Icons.Default.Check else Icons.Default.Add,
+                            onClick = { Library.toggleList(vm.title.copy(title = vm.title.title.ifBlank { d?.title ?: "" })) },
+                            modifier = Modifier.weight(1f),
+                        )
+                        GrayButton(
+                            text = when {
+                                downloaded -> "Diunduh"
+                                d?.isSeries == true && dlTarget != null -> "Unduh E${dlTarget.second}"
+                                else -> "Download"
+                            },
+                            icon = if (downloaded) Icons.Default.Check else PlayerIcons.Download,
+                            onClick = {
+                                if (d != null && dlTarget != null && !downloaded) {
+                                    startDownload(context, scope, vm.title.copy(title = vm.title.title.ifBlank { d.title }, isSeries = d.isSeries), dlTarget.first, dlTarget.second)
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
 
                     val description = rememberIndonesian(info.description)
                     description?.let {
@@ -259,6 +284,10 @@ fun DetailScreen(
                         isCurrent = isCurrent,
                         progress = if (isCurrent) watched?.progress ?: 0f else 0f,
                         onClick = { onPlay(vm.title, season.number, ep) },
+                        downloaded = com.moviebox.app.data.Downloads.find(d.id, season.number, ep) != null,
+                        onDownload = {
+                            startDownload(context, scope, vm.title.copy(title = vm.title.title.ifBlank { d.title }, isSeries = true), season.number, ep)
+                        },
                     )
                 }
             }
@@ -364,6 +393,8 @@ fun EpisodeRow(
     isCurrent: Boolean,
     progress: Float,
     onClick: () -> Unit,
+    downloaded: Boolean = false,
+    onDownload: (() -> Unit)? = null,
 ) {
     Row(
         Modifier
@@ -411,6 +442,15 @@ fun EpisodeRow(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+        }
+        if (onDownload != null) {
+            IconButton(onClick = { if (!downloaded) onDownload() }) {
+                Icon(
+                    if (downloaded) Icons.Default.Check else PlayerIcons.Download,
+                    contentDescription = "Download",
+                    tint = if (downloaded) Accent else Color.White,
+                )
+            }
         }
     }
 }

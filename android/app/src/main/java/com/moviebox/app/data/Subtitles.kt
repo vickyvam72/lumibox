@@ -2,6 +2,7 @@ package com.moviebox.app.data
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.net.Uri
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -18,6 +19,10 @@ object Subtitles {
     }
 
     private fun download(url: String): ByteArray {
+        if (url.startsWith("file:") || url.startsWith("/")) {
+            val path = if (url.startsWith("file:")) Uri.parse(url).path.orEmpty() else url
+            return java.io.File(path).readBytes()
+        }
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 10_000
         conn.readTimeout = 20_000

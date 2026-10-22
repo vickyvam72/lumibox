@@ -192,6 +192,25 @@ class PlayerActivity : ComponentActivity() {
         errorMessage = null
         loadingMessage = "Menyiapkan video…"
         loadJob = lifecycleScope.launch {
+            // 0) File unduhan: putar offline.
+            val local = intent.getStringExtra(EXTRA_LOCAL)
+            if (local != null) {
+                season = newSeason
+                episode = newEpisode
+                streams = listOf(
+                    Stream(label = "Offline", quality = null, height = 0, sizeBytes = null, url = android.net.Uri.fromFile(java.io.File(local)).toString(), headers = emptyList(), resourceId = null),
+                )
+                streamIndex = 0
+                val names = intent.getStringArrayExtra(EXTRA_LOCAL_SUB_NAMES) ?: emptyArray()
+                val paths = intent.getStringArrayExtra(EXTRA_LOCAL_SUB_PATHS) ?: emptyArray()
+                applyCaptions(names.zip(paths).map { (n, p) -> Caption(n, android.net.Uri.fromFile(java.io.File(p)).toString()) })
+                loadOffset()
+                mismatchChecked = true
+                playCurrent(if (resume) resumePosition() else 0L)
+                selectCaption(selectedCaption?.takeIf { it in captions } ?: autoCaption() ?: captions.firstOrNull())
+                return@launch
+            }
+
             // 1) Cocokkan judul addon → MovieBox (sekali, lalu tersimpan).
             if (subjectId.isBlank()) {
                 loadingMessage = "Mencari judul…"
@@ -436,6 +455,8 @@ class PlayerActivity : ComponentActivity() {
                 Player.STATE_READY -> if (!readyOnce) {
                     readyOnce = true
                     loadingMessage = null
+                    // langsung masuk Riwayat & Lanjutkan Menonton
+                    saveProgress()
                     checkDurationOnReady()
                 }
 
@@ -564,7 +585,7 @@ class PlayerActivity : ComponentActivity() {
             HistoryEntry(
                 id = subjectId,
                 title = title.title.ifBlank { details?.title ?: "" },
-                poster = title.poster ?: details?.poster,
+                poster = com.moviebox.app.ui.cleanPoster(title.poster, title.imdbId) ?: details?.poster,
                 isSeries = title.isSeries,
                 season = s,
                 episode = e,
@@ -1335,6 +1356,26 @@ class PlayerActivity : ComponentActivity() {
         private const val EXTRA_YEAR = "year"
         private const val EXTRA_IMDB = "imdb"
         private const val EXTRA_TMDB = "tmdb"
+        private const val EXTRA_LOCAL = "local"
+        private const val EXTRA_LOCAL_SUB_NAMES = "local_sub_names"
+        private const val EXTRA_LOCAL_SUB_PATHS = "local_sub_paths"
+
+        /** Putar file hasil unduhan (offline). */
+        fun startOffline(context: Context, d: com.moviebox.app.data.DownloadItem) {
+            context.startActivity(
+                Intent(context, PlayerActivity::class.java)
+                    .putExtra(EXTRA_ID, d.subjectId)
+                    .putExtra(EXTRA_TITLE, d.title)
+                    .putExtra(EXTRA_POSTER, d.poster)
+                    .putExtra(EXTRA_SERIES, d.isSeries)
+                    .putExtra(EXTRA_IMDB, d.imdbId)
+                    .putExtra(EXTRA_SEASON, d.season)
+                    .putExtra(EXTRA_EPISODE, d.episode)
+                    .putExtra(EXTRA_LOCAL, d.filePath)
+                    .putExtra(EXTRA_LOCAL_SUB_NAMES, d.subtitles.map { it.first }.toTypedArray())
+                    .putExtra(EXTRA_LOCAL_SUB_PATHS, d.subtitles.map { it.second }.toTypedArray()),
+            )
+        }
         private const val EXTRA_SEASON = "season"
         private const val EXTRA_EPISODE = "episode"
 
