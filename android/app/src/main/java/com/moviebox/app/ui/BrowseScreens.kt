@@ -160,8 +160,13 @@ class CategoryViewModel(private val row: HomeRow) : ViewModel() {
                 endReached = true
                 return emptyList()
             }
-            val ok = com.moviebox.app.data.Resolver.filterAvailable(raw)
-            if (ok.isNotEmpty()) return ok
+            val ok = com.moviebox.app.data.Resolver.notMissing(raw)
+            if (ok.isNotEmpty()) {
+                viewModelScope.launch {
+                    com.moviebox.app.data.Resolver.verify(ok) { gone -> items = items.filterNot { it.key == gone.key } }
+                }
+                return ok
+            }
         }
         return emptyList()
     }

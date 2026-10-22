@@ -39,7 +39,11 @@ pub struct WebEngine {
     token: Mutex<Option<String>>,
     detail_paths: Mutex<HashMap<String, String>>,
     good_domain: Mutex<Option<String>>,
+    h5_cookies: Mutex<HashMap<String, String>>,
 }
+
+/// Host situs web resmi MovieBox (dipakai pustaka moviebox-api).
+const H5_HOSTS: &[&str] = &["h5.aoneroom.com", "moviebox.ph", "moviebox.pk", "moviebox.id", "movieboxapp.in"];
 
 pub static ENGINE: LazyLock<WebEngine> = LazyLock::new(WebEngine::new);
 
@@ -137,6 +141,7 @@ impl WebEngine {
             token: Mutex::new(None),
             detail_paths: Mutex::new(HashMap::new()),
             good_domain: Mutex::new(None),
+            h5_cookies: Mutex::new(HashMap::new()),
         }
     }
 
@@ -377,46 +382,132 @@ impl WebEngine {
         }
     }
 
-    /// Pencarian lewat aplikasi baru (api3) + semua domain web sekaligus.
+    /// Cookie sesi situs web MovieBox (h5): didapat dari get-latest-app-pkgs, seperti moviebox-api.
+    async fn h5_cookie(&self, host: &str) -> Result<String, String> {
+        if let Some(c) = self.h5_cookies.lock().await.get(host) {
+            return Ok(c.clone());
+        }
+        let url = format!("https://{host}/wefeed-h5-bff/app/get-latest-app-pkgs?app_name=moviebox");
+        let resp = self
+            .http
+            .get(&url)
+            .header("user-agent", WEB_USER_AGENT)
+            .header("accept", "application/json")
+            .header("x-client-info", r#"{"timezone":"Asia/Jakarta"}"#)
+            .header("referer", format!("https://{host}/"))
+            .timeout(Duration::from_secs(6))
+            .send()
+            .await
+            .map_err(|e| short_err(&e).to_string())?;
+        let cookie = resp
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .filter_map(|v| v.split(';').next())
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect::<Vec<_>>()
+            .join("; ");
+        self.h5_cookies.lock().await.insert(host.to_string(), cookie.clone());
+        Ok(cookie)
+    }
+
+    /// Pencarian situs web resmi (wefeed-h5-bff/web/subject/search).
+    async fn h5_search(&self, host: &str, keyword: &str, page: usize) -> Result<Value, String> {
+        let cookie = self.h5_cookie(host).await.unwrap_or_default();
+        let url = format!("https://{host}/wefeed-h5-bff/web/subject/search");
+        let body = json!({"keyword": keyword, "page": page, "perPage": 24, "subjectType": 0});
+        let mut req = self
+            .http
+            .post(&url)
+            .header("user-agent", WEB_USER_AGENT)
+            .header("accept", "application/json")
+            .header("content-type", "application/json")
+            .header("x-client-info", r#"{"timezone":"Asia/Jakarta"}"#)
+            .header("accept-language", "id-ID,id;q=0.9,en;q=0.8")
+            .header("referer", format!("https://{host}/"))
+            .header("origin", format!("https://{host}"))
+            .body(body.to_string())
+            .timeout(Duration::from_secs(7));
+        if !cookie.is_empty() {
+            req = req.header("cookie", cookie);
+        }
+        let resp = req.send().await.map_err(|e| short_err(&e).to_string())?;
+        let status = resp.status().as_u16();
+        if status != 200 {
+            return Err(format!("HTTP {status}"));
+        }
+        resp.json::<Value>().await.map_err(|e| format!("JSON: {e}"))
+    }
+
+    /// Pencarian baru: situs web resmi + API aplikasi terbaru + domain web lain, semua bersamaan.
     /// Hasil web memuat entri yang tidak muncul di pencarian lama (mis. versi lengkap serial).
     pub async fn search(&self, keyword: &str, page: usize) -> (Vec<Value>, Vec<String>) {
-        let mut lines = Vec::new();
-        let token = match self.token(false).await {
-            Ok(t) => t,
-            Err(e) => return (Vec::new(), vec![e]),
-        };
-        let native_body = json!({"keyword": keyword, "page": page, "perPage": 20});
-        let native = async {
-            let r = self
-                .native_post("/wefeed-mobile-bff/subject-api/search", &native_body)
-                .await;
+        type Fut<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = (String, Result<Value, String>)> + Send + 'a>>;
+        let mut jobs: FuturesUnordered<Fut> = FuturesUnordered::new();
+        for host in H5_HOSTS {
+            jobs.push(Box::pin(async move {
+                (format!("h5 {host}"), self.h5_search(host, keyword, page).await)
+            }));
+        }
+        jobs.push(Box::pin(async move {
+            let body = json!({"keyword": keyword, "page": page, "perPage": 20});
+            let r = tokio::time::timeout(
+                Duration::from_secs(9),
+                self.native_post("/wefeed-mobile-bff/subject-api/search", &body),
+            )
+            .await
+            .unwrap_or_else(|_| Err("timeout".to_string()));
             ("native".to_string(), r)
-        };
-        let mut web: FuturesUnordered<_> = WEB_DOMAINS
-            .iter()
-            .map(|domain| {
-                let token = token.clone();
-                async move { (domain.to_string(), self.web_search(domain, &token, keyword, page).await) }
-            })
-            .collect();
+        }));
+        for domain in WEB_DOMAINS {
+            jobs.push(Box::pin(async move {
+                let r = match tokio::time::timeout(Duration::from_secs(6), self.token(false)).await {
+                    Ok(Ok(token)) => self.web_search(domain, &token, keyword, page).await,
+                    Ok(Err(e)) => Err(e),
+                    Err(_) => Err("token timeout".to_string()),
+                };
+                (format!("web {}", domain.trim_start_matches("https://")), r)
+            }));
+        }
+
+        let mut lines = Vec::new();
         let mut out = Vec::new();
         let mut paths = Vec::new();
-        let (name, r) = native.await;
-        match r {
-            Ok(body) => self.search_items(&body, &mut out, &mut paths),
-            Err(e) => lines.push(format!("{name}: {e}")),
-        }
-        // Cukup satu domain web yang menjawab.
-        while let Some((domain, r)) = web.next().await {
-            match r {
-                Ok(body) => {
-                    let before = out.len();
-                    self.search_items(&body, &mut out, &mut paths);
-                    if out.len() > before {
+        let mut h5_ok = false;
+        let mut native_done = false;
+        // Batas waktu total supaya layar Cari tidak menunggu lama.
+        let deadline = tokio::time::sleep(Duration::from_secs(10));
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                next = jobs.next() => {
+                    let Some((name, r)) = next else { break };
+                    match r {
+                        Ok(body) => {
+                            let before = out.len();
+                            self.search_items(&body, &mut out, &mut paths);
+                            let got = out.len() - before;
+                            lines.push(format!("{name}: {got} hasil"));
+                            if got > 0 && (name.starts_with("h5") || name.starts_with("web")) {
+                                h5_ok = true;
+                            }
+                        }
+                        Err(e) => lines.push(format!("{name}: {e}")),
+                    }
+                    if name == "native" {
+                        native_done = true;
+                    }
+                    // Cukup: satu situs web menjawab + jalur native selesai.
+                    if h5_ok && native_done {
                         break;
                     }
                 }
-                Err(e) => lines.push(format!("{domain}: {e}")),
+                _ = &mut deadline => {
+                    lines.push("batas waktu 10 detik".to_string());
+                    break;
+                }
             }
         }
         if !paths.is_empty() {

@@ -188,6 +188,19 @@ fun Poster(
                 )
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Tag jenis: FILM (putih) / SERIAL (biru)
+                Text(
+                    if (item.isSeries) "SERIAL" else "FILM",
+                    modifier = Modifier
+                        .background(if (item.isSeries) Accent else Color.White, RoundedCornerShape(2.dp))
+                        .padding(horizontal = 3.dp),
+                    color = Color(0xFF00172E),
+                    fontSize = 7.5.sp,
+                    fontWeight = FontWeight.Black,
+                    letterSpacing = 0.4.sp,
+                    lineHeight = 10.sp,
+                )
+                Spacer(Modifier.width(3.dp))
                 info.ageRating?.let { age ->
                     Text(
                         age,
@@ -202,12 +215,11 @@ fun Poster(
                 }
                 val rest = buildList {
                     info.year?.let { add(it) }
-                    if (item.isSeries) add("Serial")
-                    else info.runtimeMin?.let { m -> add(if (m >= 60) "${m / 60}j ${m % 60}m" else "${m}m") }
+                    if (!item.isSeries) info.runtimeMin?.let { m -> add(if (m >= 60) "${m / 60}j ${m % 60}m" else "${m}m") }
                 }.joinToString(" • ")
                 Text(
                     rest,
-                    color = if (item.isSeries) AccentLight else Color.White.copy(alpha = 0.85f),
+                    color = Color.White.copy(alpha = 0.85f),
                     fontSize = 8.5.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

@@ -71,6 +71,7 @@ fun SearchScreen(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var submitTick by remember { mutableIntStateOf(0) }
+    var searchDebug by remember { mutableStateOf<String?>(null) }
     val keyboard = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(query, submitTick) {
@@ -103,6 +104,7 @@ fun SearchScreen(
             }
         }
         loading = false
+        searchDebug = if (newList.isEmpty()) Repo.lastSearchDebug else null
         if (results.isEmpty()) error = if (failures >= 2) (lastError ?: "Pencarian gagal") else "Tidak ada hasil untuk \"$q\""
     }
 
@@ -154,16 +156,26 @@ fun SearchScreen(
             when {
                 query.trim().length < 2 -> SuggestionList(suggestions, onOpen, onDetails)
                 loading && results.isEmpty() -> CenterLoading()
-                error != null && results.isEmpty() -> Text(
-                    error ?: "",
-                    color = TextDim,
-                    modifier = Modifier
+                error != null && results.isEmpty() -> Column(
+                    Modifier
                         .align(Alignment.Center)
                         .padding(24.dp),
-                )
+                ) {
+                    Text(error ?: "", color = TextDim)
+                    searchDebug?.let { SearchDebug(it) }
+                }
 
                 else -> Column {
-                    SectionTitle("Film & Serial")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SectionTitle("Film & Serial")
+                        if (loading) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                Modifier.size(16.dp),
+                                color = Accent,
+                                strokeWidth = 2.dp,
+                            )
+                        }
+                    }
                     LazyVerticalGrid(
                         columns = GridCells.Fixed(3),
                         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 24.dp),
@@ -179,11 +191,26 @@ fun SearchScreen(
                                 width = null,
                             )
                         }
+                        searchDebug?.let { dbg ->
+                            item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) { SearchDebug(dbg) }
+                        }
                     }
                 }
             }
         }
     }
+}
+
+/** Catatan kecil kalau pencarian web tidak memberi hasil (membantu mencari penyebab). */
+@Composable
+private fun SearchDebug(text: String) {
+    Text(
+        "Info pencarian web:\n$text",
+        color = TextDim.copy(alpha = 0.7f),
+        fontSize = 11.sp,
+        lineHeight = 14.sp,
+        modifier = Modifier.padding(top = 16.dp),
+    )
 }
 
 /** Daftar "Rekomendasi" saat kolom pencarian masih kosong (gaya baris + tombol play). */

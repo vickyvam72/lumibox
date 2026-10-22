@@ -61,8 +61,12 @@ object Repo {
     }
 
     /** Pencarian baru: aplikasi MovieBox terbaru + situs web (seperti movieboxhd.net). */
+    /** Catatan pencarian baru terakhir (untuk diagnosis). */
+    @Volatile var lastSearchDebug: String? = null
+
     suspend fun searchNew(query: String, page: Int = 1): List<Title> = withContext(Dispatchers.IO) {
         val root = JSONObject(Native.webSearch(query, page))
+        lastSearchDebug = root.str("debug")
         root.optJSONArray("data").objects().map(::parseTitle).filter { it.id.isNotBlank() }
     }
 

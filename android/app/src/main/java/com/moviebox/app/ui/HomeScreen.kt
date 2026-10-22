@@ -201,7 +201,7 @@ class HomeViewModel : ViewModel() {
             val fromRows = rows.values.flatten().filter { Library.affinity(it) > 0 }
             val likedKeys = liked.map { it.key }.toSet()
             val likedNames = liked.map { it.title.lowercase() }.toSet()
-            val avail = com.moviebox.app.data.Resolver.filterAvailable(
+            val avail = com.moviebox.app.data.Resolver.notMissing(
                 (fromTmdb + fromGenres).filterNot(com.moviebox.app.data.Tmdb::isJunk).distinctBy { it.key }.take(40),
             )
             recommended = (avail.take(20) + Library.personalize(fromRows) + avail.drop(20))
@@ -220,11 +220,20 @@ class HomeViewModel : ViewModel() {
             if (items.isEmpty()) {
                 // Cadangan yang tetap relevan: TMDB rilis terbaru (butuh kunci TMDB).
                 items = runCatching { com.moviebox.app.data.Tmdb.latest(r.isSeries, r.local) }.getOrDefault(emptyList())
+                // Langsung tampil; yang sudah pasti tidak ada di MovieBox dibuang,
+                // sisanya dicek di latar dan dihapus dari baris kalau ternyata tidak ada.
+                items = com.moviebox.app.data.Resolver.notMissing(items)
                 if (items.isNotEmpty()) {
-                    // Hanya yang sudah ada link tontonnya di MovieBox.
-                    val known = items.filter(com.moviebox.app.data.Resolver::knownAvailable)
-                    if (known.size >= 6 && rows[r.key].isNullOrEmpty()) rows[r.key] = known
-                    items = com.moviebox.app.data.Resolver.filterAvailable(items)
+                    val toCheck = items.take(24)
+                    launch {
+                        com.moviebox.app.data.Resolver.verify(toCheck) { gone ->
+                            rows[r.key]?.let { cur ->
+                                val next = cur.filterNot { it.key == gone.key }
+                                rows[r.key] = next
+                                Library.saveTitles("v2_${r.key}", next)
+                            }
+                        }
+                    }
                 }
             }
             if (items.isNotEmpty()) {

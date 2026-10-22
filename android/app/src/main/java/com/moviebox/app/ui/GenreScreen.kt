@@ -86,11 +86,11 @@ class GenreViewModel(private val label: String, private val type: String) : View
                         val list = runCatching { com.moviebox.app.data.Tmdb.byGenre(label, series, next, y) }.getOrDefault(emptyList())
                         if (list.isNotEmpty()) {
                             // hanya yang ada di MovieBox; halaman kosong setelah disaring → coba halaman lain sekali
-                            val ok = com.moviebox.app.data.Resolver.filterAvailable(list.filterNot(com.moviebox.app.data.Tmdb::isJunk))
-                            if (ok.isNotEmpty()) return ok
-                            return com.moviebox.app.data.Resolver.filterAvailable(
-                                runCatching { com.moviebox.app.data.Tmdb.byGenre(label, series, next + 50, y) }.getOrDefault(emptyList()),
-                            )
+                            val ok = com.moviebox.app.data.Resolver.notMissing(list.filterNot(com.moviebox.app.data.Tmdb::isJunk))
+                            viewModelScope.launch {
+                                com.moviebox.app.data.Resolver.verify(ok) { gone -> items = items.filterNot { it.key == gone.key } }
+                            }
+                            return ok
                         }
                         if (page > 0) return list
                     }

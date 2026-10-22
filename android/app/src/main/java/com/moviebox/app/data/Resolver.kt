@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import java.io.IOException
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withPermit
 import java.text.Normalizer
 
@@ -78,8 +79,10 @@ object Resolver {
             .map { it.first.id }
         if (!t.isSeries || ranked.size <= 1) return ranked
         // MovieBox kadang punya entri serial kembar yang kosong → utamakan yang punya episode.
-        val withEpisodes = ranked.take(4).filter { id ->
-            runCatching { Repo.details(id) }.getOrNull()?.seasons?.any { it.episodes.isNotEmpty() } == true
+        val withEpisodes = kotlinx.coroutines.coroutineScope {
+            ranked.take(4).map { id ->
+                async { id to (runCatching { Repo.details(id) }.getOrNull()?.seasons?.any { it.episodes.isNotEmpty() } == true) }
+            }.map { it.await() }.filter { it.second }.map { it.first }
         }
         return (withEpisodes + ranked).distinct()
     }
@@ -97,7 +100,7 @@ object Resolver {
         return out.toList().take(4)
     }
 
-    private val checkLimit = kotlinx.coroutines.sync.Semaphore(6)
+    private val checkLimit = kotlinx.coroutines.sync.Semaphore(3)
     private const val MISS_TTL = 6 * 60 * 60 * 1000L
 
     /** Sudah pasti ada di MovieBox (tersimpan dari pencarian sebelumnya)? */
@@ -112,6 +115,26 @@ object Resolver {
         val ok = checkLimit.withPermit { runCatching { subjectId(t) }.isSuccess }
         if (!ok) prefs.edit().putLong("miss:$key", System.currentTimeMillis()).apply()
         return ok
+    }
+
+    /** Sudah pernah dicek dan tidak ada di MovieBox (dalam 6 jam terakhir)? */
+    fun knownMissing(t: Title): Boolean {
+        if (cached(t) != null) return false
+        val key = cacheKey(t) ?: return false
+        return System.currentTimeMillis() - prefs.getLong("miss:$key", 0L) < MISS_TTL
+    }
+
+    /** Buang yang sudah pasti tidak ada (instan, tanpa jaringan). */
+    fun notMissing(list: List<Title>): List<Title> = list.filterNot(::knownMissing)
+
+    /**
+     * Cek di latar: setiap judul yang ternyata tidak ada di MovieBox dilaporkan lewat [onMissing],
+     * jadi daftar bisa langsung tampil lalu dirapikan sambil jalan.
+     */
+    suspend fun verify(list: List<Title>, onMissing: (Title) -> Unit) = kotlinx.coroutines.coroutineScope {
+        list.filter { cached(it) == null }.forEach { t ->
+            launch { if (!available(t)) onMissing(t) }
+        }
     }
 
     /** Saring daftar: hanya judul yang ada di MovieBox, urutan tetap. */
