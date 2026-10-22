@@ -171,6 +171,17 @@ class HomeViewModel : ViewModel() {
         private set
     private var recoSignature = ""
 
+    /** Judul lokal (Indonesia)? null = belum tahu. */
+    private fun isLocal(t: Title): Boolean? {
+        t.lang?.let { return it.equals("id", true) }
+        t.country?.let { c -> return c.equals("ID", true) || c.contains("indonesia", true) }
+        com.moviebox.app.data.Tmdb.cached(t)?.let { info ->
+            info.originalLanguage?.let { return it.equals("id", true) }
+            info.originCountry?.let { return it.equals("ID", true) }
+        }
+        return null
+    }
+
     fun loadRecommendations() {
         val liked = Library.likedTitles.toList()
         if (!Library.hasTaste()) {
@@ -183,39 +194,63 @@ class HomeViewModel : ViewModel() {
         recoSignature = signature
         viewModelScope.launch {
             val tmdb = com.moviebox.app.data.Tmdb.enabled
-            // 1) TMDB: rekomendasi dari judul yang paling baru disukai
-            val fromLiked = if (tmdb) {
-                liked.take(5).map { t -> async { com.moviebox.app.data.Tmdb.recommendations(t) } }.map { it.await() }
-            } else emptyList()
-            val mixed = mutableListOf<Title>()
-            for (i in 0 until 20) fromLiked.forEach { l -> l.getOrNull(i)?.let { mixed += it } }
-            // 2) Genre favorit (film & serial)
-            val fav = Library.topGenres().take(2)
-            val fromGenres = if (tmdb) {
-                fav.flatMap { g ->
-                    listOf(
-                        async { runCatching { com.moviebox.app.data.Tmdb.byGenre(g, false, 1) }.getOrDefault(emptyList()) },
-                        async { runCatching { com.moviebox.app.data.Tmdb.byGenre(g, true, 1) }.getOrDefault(emptyList()) },
-                    )
-                }.map { it.await() }.flatten()
-            } else emptyList()
-            // 3) Judul di beranda (selalu ada, juga kalau baru menekan "Bukan untuk Saya")
-            val fromRows = rows.values.flatten()
+            val recent = liked.take(10)
+            // 1) Asal judul yang disukai: lokal / global (TMDB kalau belum diketahui)
+            if (tmdb) recent.filter { isLocal(it) == null }.map { async { com.moviebox.app.data.Tmdb.info(it) } }.forEach { it.await() }
+            val origins = recent.mapNotNull(::isLocal)
+            val localShare = if (origins.isEmpty()) 0.5 else origins.count { it }.toDouble() / origins.size
+            val wantLocal = localShare > 0.2
+            val wantGlobal = localShare < 0.8
+            val wantSeries = recent.count { it.isSeries }
+            val wantMovies = recent.size - wantSeries
+
+            // 2) Kandidat: rekomendasi TMDB dari judul yang disukai + genre favorit per asal + baris beranda
+            val fav = Library.topGenres().take(3).ifEmpty { recent.flatMap { it.genres }.distinct().take(3) }
+            val jobs = mutableListOf<kotlinx.coroutines.Deferred<List<Title>>>()
+            if (tmdb) {
+                recent.take(5).forEach { t -> jobs += async { com.moviebox.app.data.Tmdb.recommendations(t) } }
+                for (g in fav) {
+                    for (series in listOf(false, true)) {
+                        if (series && wantSeries == 0 && recent.isNotEmpty()) continue
+                        if (!series && wantMovies == 0 && recent.isNotEmpty()) continue
+                        if (wantLocal) jobs += async { runCatching { com.moviebox.app.data.Tmdb.byGenre(g, series, 1, local = true) }.getOrDefault(emptyList()) }
+                        if (wantGlobal) jobs += async { runCatching { com.moviebox.app.data.Tmdb.byGenre(g, series, 1, local = false) }.getOrDefault(emptyList()) }
+                    }
+                }
+            }
+            // Baris Lokal pasti judul Indonesia (cache lama belum menyimpan bahasa).
+            val fromRows = mainRows().flatMap { r ->
+                rows[r.key].orEmpty().map { if (r.local && it.lang == null && it.country == null) it.copy(country = "ID") else it }
+            }
+            val pool = (jobs.flatMap { it.await() } + fromRows)
             val likedKeys = liked.map { it.key }.toSet()
-            val pool = (mixed + fromGenres + fromRows)
-                .filterNot(com.moviebox.app.data.Tmdb::isJunk)
-                .filter { it.key !in likedKeys && Library.taste(it) == 0 }
+            val likedNames = liked.map { it.title.lowercase() }.toSet()
+            val disliked = Library.dislikedGenres()
+            val favSet = fav.toSet()
+            val clean = com.moviebox.app.data.Resolver.notMissing(pool)
+                .filter(com.moviebox.app.data.ContentFilter::allows)
+                .filter { it.key !in likedKeys && it.title.lowercase() !in likedNames && Library.taste(it) == 0 }
+                .filter { t -> t.genres.none { it in disliked } || t.genres.any { it in favSet } }
                 .distinctBy { it.key }
                 .distinctBy { it.title.lowercase() }
-            val rank = pool.withIndex().associate { (i, t) -> t.key to i }
-            recommended = com.moviebox.app.data.Resolver.notMissing(pool)
-                // genre yang tidak disukai disingkirkan, yang disukai naik; urutan sumber sebagai penentu seri
-                .filter { Library.affinity(it) >= 0 }
-                .sortedWith(
-                    compareByDescending<Title> { Library.affinity(it) }
-                        .thenBy { rank[it.key] ?: Int.MAX_VALUE },
-                )
-                .take(30)
+            // 3) Hanya yang relevan: genrenya mirip dengan yang disukai
+            val relevant = clean.filter { t -> favSet.isEmpty() || t.genres.any { it in favSet } }
+            fun byYear(list: List<Title>) = list.sortedWith(
+                compareByDescending<Title> { it.year?.toIntOrNull() ?: 0 }
+                    .thenByDescending { Library.affinity(it) },
+            )
+            val local = byYear(relevant.filter { isLocal(it) == true })
+            val global = byYear(relevant.filter { isLocal(it) != true })
+            // 4) Lokal/global sesuai perbandingan yang disukai, tetap urut tahun terbaru → terlama
+            val picked = when {
+                !wantGlobal -> local
+                !wantLocal -> global
+                else -> {
+                    val nLocal = (30 * localShare).toInt().coerceIn(5, 25)
+                    local.take(nLocal) + global.take(30 - nLocal.coerceAtMost(local.size))
+                }
+            }
+            recommended = byYear(picked).take(30)
         }
     }
 

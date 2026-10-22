@@ -155,7 +155,7 @@ object Tmdb {
         }
 
     /** Judul per genre (populer, cukup banyak penilaian) — supaya isi kategori sesuai genrenya. */
-    suspend fun byGenre(label: String, series: Boolean, page: Int, year: Int? = null): List<Title> = withContext(Dispatchers.IO) {
+    suspend fun byGenre(label: String, series: Boolean, page: Int, year: Int? = null, local: Boolean? = null): List<Title> = withContext(Dispatchers.IO) {
         if (!enabled) return@withContext emptyList()
         val ids = Genres.tmdbFor(label, series) ?: return@withContext emptyList()
         val params = mutableMapOf(
@@ -170,6 +170,15 @@ object Tmdb {
         if (!series) {
             params["with_release_type"] = "4|5|6"
             params["release_date.lte"] = java.time.LocalDate.now().toString()
+        }
+        when (local) {
+            true -> {
+                params["with_origin_country"] = "ID"
+                params["with_original_language"] = "id"
+                params["vote_count.gte"] = "1"
+            }
+            false -> params["without_origin_country"] = "ID"
+            null -> Unit
         }
         if (label == "Anime") params["with_original_language"] = "ja"
         if (label == "Animasi") params["without_original_language"] = "ja"

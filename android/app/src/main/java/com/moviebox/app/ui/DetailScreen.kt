@@ -88,6 +88,49 @@ class DetailViewModel(private val key: String) : ViewModel() {
         private set
     var selectedSeason by mutableIntStateOf(0)
 
+    /** null = sedang dicek, true = ada video, false = tidak ada sumber. */
+    var hasSource by mutableStateOf<Boolean?>(null)
+        private set
+
+    /** Cek langsung ke MovieBox apakah videonya benar-benar ada (hasilnya dipakai pemutar, jadi Putar juga lebih cepat). */
+    private suspend fun checkSource(d: Details, subjectId: String, s: Int, e: Int) {
+        hasSource = null
+        if (d.isShortDrama && !com.moviebox.app.data.ContentFilter.showShortDrama) {
+            hasSource = false
+            return
+        }
+        suspend fun ok(id: String) = runCatching { Repo.streams(id, s, e) }.getOrNull().orEmpty().isNotEmpty()
+        val playId = d.originalSubjectId?.takeIf { it.isNotBlank() } ?: subjectId
+        if (ok(playId) || (playId != subjectId && ok(subjectId))) {
+            hasSource = true
+            return
+        }
+        // Entri ini kosong → coba entri lain dengan judul sama (seperti di pemutar)
+        val named = title.copy(title = title.title.ifBlank { d.title })
+        val alts = runCatching { Resolver.alternatives(named, setOf(subjectId, playId)) }.getOrDefault(emptyList())
+        for (alt in alts) {
+            val ad = runCatching { Repo.details(alt) }.getOrNull() ?: continue
+            if (ad.isSeries != d.isSeries) continue
+            val (as_, ae) = if (ad.isSeries) ad.firstEpisode() else 0 to 0
+            if (runCatching { Repo.streams(alt, as_, ae) }.getOrNull().orEmpty().isNotEmpty()) {
+                Resolver.remember(title, alt)
+                title = title.copy(id = alt)
+                details = ad
+                hasSource = true
+                return
+            }
+        }
+        hasSource = false
+    }
+
+    fun recheck() {
+        val d = details ?: return
+        viewModelScope.launch {
+            val (s, e) = if (d.isSeries) d.firstEpisode() else 0 to 0
+            checkSource(d, d.id.ifBlank { title.id }, s, e)
+        }
+    }
+
     init {
         load()
     }
@@ -122,7 +165,7 @@ class DetailViewModel(private val key: String) : ViewModel() {
                     watched != null && watched.season > 0 -> watched.season to watched.episode
                     else -> d.firstEpisode()
                 }
-                Repo.prefetch(playId, s, e)
+                launch { checkSource(d, subjectId, s, e) }
             } catch (e: Exception) {
                 error = e.message ?: "Gagal memuat detail"
             } finally {
@@ -187,7 +230,33 @@ fun DetailScreen(
                                 watched != null -> "Lanjutkan"
                                 else -> "Putar"
                             }
-                            if (d.isShortDrama && !com.moviebox.app.data.ContentFilter.showShortDrama) {
+                            if (vm.hasSource == null) {
+                                GrayButton(
+                                    text = "Memeriksa sumber video…",
+                                    icon = PlayerIcons.Play,
+                                    onClick = {},
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            } else if (vm.hasSource == false && !(d.isShortDrama && !com.moviebox.app.data.ContentFilter.showShortDrama)) {
+                                Text(
+                                    "Video untuk judul ini belum tersedia di MovieBox.",
+                                    color = TextDim,
+                                    fontSize = 14.sp,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                                )
+                                Text(
+                                    "Periksa lagi",
+                                    color = AccentLight,
+                                    fontSize = 14.sp,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { vm.recheck() }
+                                        .padding(8.dp),
+                                )
+                            } else if (d.isShortDrama && !com.moviebox.app.data.ContentFilter.showShortDrama) {
                                 Text(
                                     "Ini drama pendek MovieBox, bukan film/serial biasa. Link videonya dari MovieBox " +
                                         "sering berisi film lain, jadi untuk sementara tidak diputar.",
@@ -231,7 +300,7 @@ fun DetailScreen(
                             onClick = { Library.toggleList(vm.title.copy(title = vm.title.title.ifBlank { d?.title ?: "" })) },
                             modifier = Modifier.weight(1f),
                         )
-                        GrayButton(
+                        if (vm.hasSource != false || downloaded) GrayButton(
                             text = when {
                                 downloaded -> "Diunduh"
                                 d?.isSeries == true && dlTarget != null -> "Unduh E${dlTarget.second}"

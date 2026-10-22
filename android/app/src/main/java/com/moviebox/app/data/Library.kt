@@ -113,6 +113,9 @@ object Library {
     /** Berubah setiap kali penilaian berubah (dipakai untuk memuat ulang rekomendasi). */
     fun tasteSignature(): String = likes.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }.hashCode().toString()
 
+    /** Genre yang tidak disukai. */
+    fun dislikedGenres(): Set<String> = likedGenres.filter { it.value < 0 }.keys
+
     /** Genre favorit (urut dari yang paling disukai). */
     fun topGenres(): List<String> = likedGenres.filter { it.value > 0 }.entries.sortedByDescending { it.value }.map { it.key }
 
@@ -194,7 +197,9 @@ object Library {
                     .put("rating", t.rating ?: JSONObject.NULL)
                     .put("description", t.description ?: JSONObject.NULL)
                     .put("genres", JSONArray(t.genres))
-                    .put("tmdbId", t.tmdbId ?: JSONObject.NULL),
+                    .put("tmdbId", t.tmdbId ?: JSONObject.NULL)
+                    .put("lang", t.lang ?: JSONObject.NULL)
+                    .put("country", t.country ?: JSONObject.NULL),
             )
         }
         prefs.edit().putString(key, arr.toString()).apply()
@@ -216,6 +221,8 @@ object Library {
                 description = o.str("description"),
                 genres = o.optJSONArray("genres").strings(),
                 tmdbId = o.str("tmdbId"),
+                lang = o.str("lang"),
+                country = o.str("country"),
             )
         }
     }.getOrDefault(emptyList())
