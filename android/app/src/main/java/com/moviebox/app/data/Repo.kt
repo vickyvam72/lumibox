@@ -103,6 +103,7 @@ object Repo {
         detailsCache[id]?.let { return it }
         val d = fetchDetails(id)
         detailsCache[id] = d
+        ContentFilter.learn(id, d)
         return d
     }
 

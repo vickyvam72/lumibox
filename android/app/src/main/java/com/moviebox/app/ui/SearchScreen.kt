@@ -74,22 +74,34 @@ fun SearchScreen(
     var searchDebug by remember { mutableStateOf<String?>(null) }
     // Hasil yang ternyata (menurut TMDB) film India / drama pendek → disembunyikan sesuai Setting.
     var hidden by remember { mutableStateOf<Set<String>>(emptySet()) }
-    LaunchedEffect(results, com.moviebox.app.data.ContentFilter.showIndian, com.moviebox.app.data.Tmdb.enabled) {
-        if (com.moviebox.app.data.ContentFilter.showIndian || !com.moviebox.app.data.Tmdb.enabled) return@LaunchedEffect
-        val limit = kotlinx.coroutines.sync.Semaphore(4)
+    var checked by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var checking by remember { mutableStateOf(false) }
+    val filterAll = !com.moviebox.app.data.ContentFilter.showIndian || !com.moviebox.app.data.ContentFilter.showShortDrama
+    LaunchedEffect(results, com.moviebox.app.data.ContentFilter.showIndian, com.moviebox.app.data.ContentFilter.showShortDrama) {
+        if (com.moviebox.app.data.ContentFilter.showIndian && com.moviebox.app.data.ContentFilter.showShortDrama) return@LaunchedEffect
+        val limit = kotlinx.coroutines.sync.Semaphore(6)
+        checking = true
         kotlinx.coroutines.coroutineScope {
-            results.take(30).forEach { t ->
+            results.forEach { t ->
                 launch {
                     limit.acquire()
                     try {
-                        com.moviebox.app.data.Tmdb.info(t)
+                        if (com.moviebox.app.data.ContentFilter.allows(t)) {
+                            // Detail MovieBox: genre (mis. "Modern Drama"), negara, jenis
+                            if (t.id.isNotBlank()) runCatching { Repo.details(t.id) }
+                            if (com.moviebox.app.data.ContentFilter.allows(t) && com.moviebox.app.data.Tmdb.enabled) {
+                                com.moviebox.app.data.Tmdb.info(t)
+                            }
+                        }
                         if (!com.moviebox.app.data.ContentFilter.allows(t)) hidden = hidden + t.key
+                        checked = checked + t.key
                     } finally {
                         limit.release()
                     }
                 }
             }
         }
+        checking = false
     }
     val keyboard = LocalSoftwareKeyboardController.current
 
@@ -187,7 +199,7 @@ fun SearchScreen(
                 else -> Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         SectionTitle("Film & Serial")
-                        if (loading) {
+                        if (loading || checking) {
                             androidx.compose.material3.CircularProgressIndicator(
                                 Modifier.size(16.dp),
                                 color = Accent,
@@ -202,7 +214,13 @@ fun SearchScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        items(com.moviebox.app.data.ContentFilter.apply(results).filter { it.key !in hidden }.distinctBy { it.key }, key = { it.key }) { item ->
+                        items(
+                            com.moviebox.app.data.ContentFilter.apply(results)
+                                // judul tampil setelah dicek (genre/negara), supaya drama pendek & film India tidak sempat muncul
+                                .filter { it.key !in hidden && (!filterAll || it.key in checked) }
+                                .distinctBy { it.key },
+                            key = { it.key },
+                        ) { item ->
                             Poster(
                                 item = item,
                                 onClick = { onOpen(item) },

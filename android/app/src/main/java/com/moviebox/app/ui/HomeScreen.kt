@@ -112,10 +112,6 @@ class HomeViewModel : ViewModel() {
     private var page = 0
     private val seenIds = mutableSetOf<String>()
 
-    init {
-        loadCatalogs()
-    }
-
     /** Pakai TMDB saja kalau kuncinya ada (poster, judul, skor konsisten & cepat). */
     private val tmdbMode: Boolean get() = com.moviebox.app.data.Tmdb.enabled
 
@@ -321,6 +317,11 @@ class HomeViewModel : ViewModel() {
 
     fun allTitles(): List<Title> =
         (rows.values.flatten() + sections.flatMap { it.items }).distinctBy { it.key }
+
+    // Harus paling akhir: semua properti (rows, failedRows, …) sudah dibuat sebelum dimuat.
+    init {
+        loadCatalogs()
+    }
 }
 
 @Composable

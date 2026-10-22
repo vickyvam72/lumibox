@@ -329,7 +329,7 @@ private fun ContentFilterCard() {
         )
         FilterSwitch(
             title = "Film & serial India / Bollywood",
-            subtitle = "Termasuk film berbahasa Hindi, Tamil, Telugu, Malayalam, dan lainnya.",
+            subtitle = "Termasuk film berbahasa Hindi, Tamil, Telugu, Malayalam, dan drama Pakistan (Urdu).",
             checked = com.moviebox.app.data.ContentFilter.showIndian,
             onChange = com.moviebox.app.data.ContentFilter::setIndian,
         )
