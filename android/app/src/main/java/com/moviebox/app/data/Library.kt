@@ -79,7 +79,7 @@ object Library {
     private fun tasteKeys(t: Title): List<String> = listOfNotNull(
         t.id.takeIf { it.isNotBlank() },
         t.imdbId,
-        t.tmdbId?.let { "tmdb$it" },
+        t.tmdbId?.let { "tmdb${if (t.isSeries) "tv" else "mv"}$it" },
         t.title.lowercase().trim().takeIf { it.isNotBlank() }?.let { "t:$it" },
     )
 

@@ -155,7 +155,11 @@ class CategoryViewModel(private val row: HomeRow) : ViewModel() {
         viaTmdb = true
         repeat(4) {
             page += 1
-            val raw = Tmdb.discover(row.isSeries, row.local, y, page)
+            val raw = if (row.kind == RowKind.LATEST && y == null && !row.isSeries) {
+                Tmdb.newestPage(row.local, page)
+            } else {
+                Tmdb.discover(row.isSeries, row.local, y, page)
+            }
             if (raw.isEmpty()) {
                 endReached = true
                 return emptyList()

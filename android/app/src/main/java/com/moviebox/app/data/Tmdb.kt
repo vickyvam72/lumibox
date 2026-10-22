@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.IOException
@@ -75,7 +76,7 @@ object Tmdb {
         return result
     }
 
-    private fun cacheKey(t: Title) = t.imdbId ?: t.tmdbId?.let { "tmdb$it" } ?: "${t.title}|${t.year}|${t.isSeries}"
+    private fun cacheKey(t: Title) = (t.imdbId ?: t.tmdbId?.let { "tmdb$it" } ?: "${t.title}|${t.year}") + "|" + (if (t.isSeries) "tv" else "mv")
 
     /**
      * Daftar rilis terbaru dari TMDB (cadangan kalau addon tidak bisa dibuka).
@@ -209,10 +210,70 @@ object Tmdb {
     }
 
     /** Rilis terbaru: urut tanggal rilis (paling baru dulu), hanya yang sudah rilis digital. */
-    suspend fun newest(series: Boolean, local: Boolean): List<Title> {
-        val out = mutableListOf<Title>()
-        for (page in 1..2) out += discover(series, local, null, page)
-        return out.distinctBy { it.key }
+    suspend fun newest(series: Boolean, local: Boolean): List<Title> = withContext(Dispatchers.IO) {
+        if (series) {
+            val out = mutableListOf<Title>()
+            for (page in 1..2) out += discover(series, local, null, page)
+            return@withContext out.distinctBy { it.key }
+        }
+        val all = mutableListOf<Title>()
+        for (page in 1..3) {
+            val p = newestRaw(local, page)
+            all += p
+            if (p.size < 20) break
+        }
+        sortByDigital(all.distinctBy { it.key })
+    }
+
+    /** Satu halaman "rilis digital terbaru" (untuk Lainnya), urut tanggal rilis digital. */
+    suspend fun newestPage(local: Boolean, page: Int): List<Title> = withContext(Dispatchers.IO) {
+        sortByDigital(newestRaw(local, page))
+    }
+
+    /** Film yang rilis DIGITAL (streaming/DVD) dalam beberapa bulan terakhir. */
+    private fun newestRaw(local: Boolean, page: Int): List<Title> {
+        if (!enabled) return emptyList()
+        val today = java.time.LocalDate.now()
+        val params = mutableMapOf(
+            "language" to "en-US",
+            "sort_by" to "popularity.desc",
+            "include_adult" to "false",
+            "page" to page.toString(),
+        )
+        applyQuality(params, false, local)
+        params["with_release_type"] = "4|5"
+        params["release_date.gte"] = today.minusDays(if (local) 365 else 120).toString()
+        params["release_date.lte"] = today.toString()
+        return parseResults(runCatching { get("/discover/movie", params) }.getOrNull(), false)
+    }
+
+    private val digitalDates = ConcurrentHashMap<String, String>()
+
+    /** Tanggal rilis digital pertama (tipe 4 digital / 5 fisik) sebuah film. */
+    private fun digitalDate(tmdbId: String): String? {
+        digitalDates[tmdbId]?.let { return it.ifEmpty { null } }
+        val today = java.time.LocalDate.now().toString()
+        val res = runCatching { get("/movie/$tmdbId/release_dates", emptyMap()) }.getOrNull() ?: return null
+        val date = res.optJSONArray("results").objects()
+            .flatMap { it.optJSONArray("release_dates").objects() }
+            .filter { it.optInt("type") == 4 || it.optInt("type") == 5 }
+            .mapNotNull { it.str("release_date")?.take(10) }
+            .filter { it <= today }
+            .minOrNull()
+        digitalDates[tmdbId] = date ?: ""
+        return date
+    }
+
+    /** Urutkan dari rilis digital paling baru. */
+    private suspend fun sortByDigital(list: List<Title>): List<Title> = kotlinx.coroutines.coroutineScope {
+        val limit = kotlinx.coroutines.sync.Semaphore(6)
+        val dated = list.map { t ->
+            async {
+                val d = t.tmdbId?.let { id -> limit.acquire(); try { digitalDate(id) } finally { limit.release() } }
+                t to (d ?: "")
+            }
+        }.map { it.await() }
+        dated.sortedByDescending { it.second }.map { it.first }
     }
 
     /** Daftar lengkap Lokal/Global (terbaru dulu), opsional per tahun — untuk halaman "Lainnya". */

@@ -126,7 +126,21 @@ class HomeViewModel : ViewModel() {
         if (loadedMode != null && loadedMode != tmdbMode) refresh()
     }
 
+    private var lastLoadAt = 0L
+
+    /**
+     * Daftar diperbarui otomatis: setiap kali beranda dibuka lagi dan terakhir dimuat lebih dari
+     * 3 jam lalu (film yang baru rilis digital langsung masuk). Daftar lama tetap tampil selama memuat.
+     */
+    fun refreshIfStale() {
+        if (lastLoadAt == 0L || System.currentTimeMillis() - lastLoadAt < 3 * 60 * 60 * 1000L) return
+        lastLoadAt = System.currentTimeMillis()
+        recoSignature = ""
+        if (tmdbMode) allRows().forEach { loadRow(it, force = true) } else refresh()
+    }
+
     private fun loadCatalogs() {
+        lastLoadAt = System.currentTimeMillis()
         loadedMode = tmdbMode
         if (tmdbMode) {
             catalogs = emptyList()
@@ -390,6 +404,14 @@ fun HomeScreen(
 ) {
     val heroItems = vm.heroItems()
     androidx.compose.runtime.LaunchedEffect(com.moviebox.app.data.Tmdb.enabled) { vm.checkMode() }
+    val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    androidx.compose.runtime.DisposableEffect(lifecycle) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, e ->
+            if (e == androidx.lifecycle.Lifecycle.Event.ON_RESUME) vm.refreshIfStale()
+        }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
+    }
     val taste = Library.tasteSignature()
     val loadedRows = vm.rows.size
     androidx.compose.runtime.LaunchedEffect(taste, loadedRows) {

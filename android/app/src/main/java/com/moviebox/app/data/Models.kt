@@ -26,7 +26,8 @@ data class Title(
 ) {
     /** Kunci unik untuk daftar/navigasi. */
     val key: String
-        get() = id.ifBlank { imdbId ?: tmdbId?.let { "tmdb$it" } ?: title }
+        // film & serial TMDB punya penomoran sendiri → jenis ikut di kunci (cegah poster tertukar)
+        get() = id.ifBlank { imdbId ?: tmdbId?.let { "tmdb${if (isSeries) "tv" else "mv"}$it" } ?: title }
 }
 
 data class Section(
