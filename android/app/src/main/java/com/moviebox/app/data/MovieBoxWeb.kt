@@ -23,8 +23,9 @@ object MovieBoxWeb {
         country: String = "ALL",
         page: Int = 1,
         perPage: Int = 24,
+        year: String = "ALL",
     ): List<Title> {
-        val key = "$tabId|$genre|$country|$page"
+        val key = "$tabId|$genre|$country|$page|$year"
         cache[key]?.let { return it }
         val body = JSONObject()
             .put("tabId", tabId)
@@ -34,7 +35,7 @@ object MovieBoxWeb {
                     .put("sort", "RECOMMEND")
                     .put("genre", genre)
                     .put("country", country)
-                    .put("year", "ALL")
+                    .put("year", year)
                     .put("language", "ALL"),
             )
             .put("page", page)

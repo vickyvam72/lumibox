@@ -136,7 +136,10 @@ private fun LumiApp() {
         ) {
             NavHost(navController = nav, startDestination = Tab.HOME.route) {
                 composable(Tab.HOME.route) {
-                    HomeScreen(vm = homeVm, onOpen = open, onDetails = details, onPlay = play, onGenre = genre)
+                    HomeScreen(
+                        vm = homeVm, onOpen = open, onDetails = details, onPlay = play, onGenre = genre,
+                        onRow = { r -> nav.navigate("row/${Uri.encode(r.key)}") },
+                    )
                 }
                 composable(Tab.SEARCH.route) {
                     SearchScreen(suggestions = homeVm.allTitles(), onOpen = open, onDetails = details)
@@ -172,6 +175,23 @@ private fun LumiApp() {
                         onBack = { nav.popBackStack() },
                         onPlay = { t, s, e -> PlayerActivity.start(context, t, s, e) },
                     )
+                }
+                composable(
+                    route = "row/{key}",
+                    arguments = listOf(navArgument("key") { type = NavType.StringType }),
+                ) { entry ->
+                    val key = Uri.decode(entry.arguments?.getString("key").orEmpty())
+                    val row = homeVm.mainRows().firstOrNull { it.key == key }
+                    if (row == null) {
+                        androidx.compose.runtime.LaunchedEffect(Unit) { nav.popBackStack() }
+                    } else {
+                        com.moviebox.app.ui.CategoryScreen(
+                            row = row,
+                            onBack = { nav.popBackStack() },
+                            onOpen = open,
+                            onDetails = details,
+                        )
+                    }
                 }
                 composable(
                     route = "genre/{label}/{type}",

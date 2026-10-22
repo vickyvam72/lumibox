@@ -33,9 +33,14 @@ object Resolver {
             val original = Addon.originalName(if (t.isSeries) "series" else "movie", t.imdbId)
             if (original != null && names.add(original)) match = findMatch(original, t)
         }
-        if (match == null && t.tmdbId != null) {
-            val english = Tmdb.englishTitle(t)
-            if (english != null && names.add(english)) match = findMatch(english, t)
+        if (match == null) {
+            // Judul Inggris / asli / alternatif dari TMDB (mis. "Teluh Darah" → "Blood Curse")
+            for (alt in Tmdb.altTitles(t)) {
+                if (!names.add(alt)) continue
+                match = findMatch(alt, t)
+                if (match != null) break
+                if (names.size > 6) break
+            }
         }
         if (match == null) throw IOException("\"${t.title}\" belum tersedia di MovieBox.")
         cacheKey(t)?.let { prefs.edit().putString(it, match).apply() }

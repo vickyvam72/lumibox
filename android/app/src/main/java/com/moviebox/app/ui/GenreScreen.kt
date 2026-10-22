@@ -48,9 +48,24 @@ class GenreViewModel(private val label: String, private val type: String) : View
         private set
     var endReached by mutableStateOf(false)
         private set
+    var year by mutableStateOf<Int?>(null)
+        private set
     private var page = 0
+    private var job: kotlinx.coroutines.Job? = null
 
     init {
+        loadMore()
+    }
+
+    fun pickYear(y: Int?) {
+        if (y == year) return
+        year = y
+        job?.cancel()
+        loading = false
+        items = emptyList()
+        page = 0
+        endReached = false
+        error = null
         loadMore()
     }
 
@@ -59,7 +74,8 @@ class GenreViewModel(private val label: String, private val type: String) : View
         val genre = Genres.byLabel(label)?.movieBox ?: label
         loading = true
         error = null
-        viewModelScope.launch {
+        val y = year
+        job = viewModelScope.launch {
             try {
                 val next = page + 1
                 // TMDB (kalau ada kunci): isi benar-benar sesuai genre. Tanpa kunci: MovieBox,
@@ -67,12 +83,13 @@ class GenreViewModel(private val label: String, private val type: String) : View
                 val tmdb = com.moviebox.app.data.Tmdb.enabled
                 suspend fun source(series: Boolean): List<Title> {
                     if (tmdb) {
-                        val list = runCatching { com.moviebox.app.data.Tmdb.byGenre(label, series, next) }.getOrDefault(emptyList())
+                        val list = runCatching { com.moviebox.app.data.Tmdb.byGenre(label, series, next, y) }.getOrDefault(emptyList())
                         if (list.isNotEmpty() || page > 0) return list
                     }
                     val tab = if (series) MovieBoxWeb.TAB_SERIES else MovieBoxWeb.TAB_MOVIES
-                    return runCatching { MovieBoxWeb.filter(tab, genre, page = next) }.getOrDefault(emptyList())
+                    return runCatching { MovieBoxWeb.filter(tab, genre, page = next, year = y?.toString() ?: "ALL") }.getOrDefault(emptyList())
                         .filter { t -> t.genres.any { it.equals(label, true) || it.equals(genre, true) } }
+                        .filter { y == null || it.year == y.toString() }
                 }
                 val movies = async { if (type == "series") emptyList() else source(false) }
                 val series = async { if (type == "movie") emptyList() else source(true) }
@@ -88,11 +105,13 @@ class GenreViewModel(private val label: String, private val type: String) : View
                 val fresh = merged.distinctBy { it.key }.filter { it.key !in known }
                 if (fresh.isEmpty()) {
                     endReached = true
-                    if (items.isEmpty()) error = "Belum ada judul untuk genre ini."
+                    if (items.isEmpty()) error = if (y != null) "Belum ada judul $label tahun $y." else "Belum ada judul untuk genre ini."
                 } else {
                     page = next
                     items = items + fresh
                 }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 error = e.message ?: "Gagal memuat genre"
             } finally {
@@ -116,42 +135,17 @@ fun GenreScreen(
         "series" -> "Serial $label"
         else -> label
     }
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(Background)
-            .statusBarsPadding(),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(4.dp)) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Kembali", tint = Color.White)
-            }
-            Text(heading, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, color = Color.White)
-        }
-        Box(Modifier.fillMaxSize()) {
-            if (vm.items.isEmpty() && vm.loading) {
-                CenterLoading()
-            } else if (vm.items.isEmpty() && vm.error != null) {
-                ErrorBox(vm.error ?: "", onRetry = { vm.loadMore() }, modifier = Modifier.align(Alignment.Center))
-            } else {
-                LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    items(vm.items.distinctBy { it.key }, key = { it.key }) { item ->
-                        Poster(item, onClick = { onOpen(item) }, onLongClick = { onDetails(item) }, width = null)
-                    }
-                    if (!vm.endReached) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            LaunchedEffect(vm.items.size) { vm.loadMore() }
-                            SmallLoading()
-                        }
-                    }
-                }
-            }
-        }
-    }
+    BrowseGrid(
+        heading = heading,
+        year = vm.year,
+        onYear = vm::pickYear,
+        items = vm.items,
+        loading = vm.loading,
+        error = vm.error,
+        endReached = vm.endReached,
+        onLoadMore = vm::loadMore,
+        onBack = onBack,
+        onOpen = onOpen,
+        onDetails = onDetails,
+    )
 }

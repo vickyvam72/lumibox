@@ -279,6 +279,7 @@ fun HomeScreen(
     onDetails: (Title) -> Unit,
     onPlay: (Title) -> Unit,
     onGenre: (Genre) -> Unit,
+    onRow: (HomeRow) -> Unit = {},
 ) {
     val heroItems = vm.heroItems()
     val likedCount = Library.likedTitles.size
@@ -342,7 +343,7 @@ fun HomeScreen(
             }
 
             // Hanya 4 kategori: Film Lokal, Serial Lokal, Film Global, Serial Global
-            main.forEach { r -> rowItem(r, vm, onOpen, onDetails) }
+            main.forEach { r -> rowItem(r, vm, onOpen, onDetails, onRow) }
         }
     }
 
@@ -362,12 +363,13 @@ private fun androidx.compose.foundation.lazy.LazyListScope.rowItem(
     vm: HomeViewModel,
     onOpen: (Title) -> Unit,
     onDetails: (Title) -> Unit,
+    onRow: (HomeRow) -> Unit,
 ) {
     item(key = r.key) {
         LaunchedEffect(r.key, vm.catalogsLoading) { if (!vm.catalogsLoading) vm.loadRow(r) }
         val items = vm.rows[r.key]
         when {
-            items != null && items.isNotEmpty() -> TitleRow(r.title, Library.personalize(items), onOpen, onDetails)
+            items != null && items.isNotEmpty() -> TitleRow(r.title, Library.personalize(items), onOpen, onDetails, onMore = { onRow(r) })
             vm.failedRows[r.key] == true -> Column {
                 SectionTitle(r.title)
                 Text(

@@ -126,25 +126,48 @@ fun Poster(
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
         )
+        val info = mergeInfo(item, tmdb, null, null)
+        val score = (tmdb?.score ?: item.rating)?.toDoubleOrNull()?.takeIf { it > 0 }
+        // Atas: judul kecil (kiri) + skor (kanan)
+        Row(
+            Modifier
+                .align(Alignment.TopStart)
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color.Black.copy(alpha = 0.75f), Color.Transparent)))
+                .padding(start = if (rank != null) 30.dp else 5.dp, end = 4.dp, top = 4.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Text(
+                info.title.ifBlank { item.title },
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(top = 1.dp, end = 3.dp),
+                color = Color.White,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                lineHeight = 11.sp,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                style = androidx.compose.ui.text.TextStyle(
+                    shadow = androidx.compose.ui.graphics.Shadow(Color.Black, blurRadius = 4f),
+                ),
+            )
+            if (score != null) {
+                Text(
+                    "★ " + "%.1f".format(java.util.Locale.US, score),
+                    modifier = Modifier
+                        .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(4.dp))
+                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                    color = AccentLight,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
         if (rank != null) {
             Top10Badge(Modifier.align(Alignment.TopStart))
         }
-        val score = (tmdb?.score ?: item.rating)?.toDoubleOrNull()?.takeIf { it > 0 }
-        if (score != null) {
-            Text(
-                "★ " + "%.1f".format(java.util.Locale.US, score),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(4.dp)
-                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(4.dp))
-                    .padding(horizontal = 5.dp, vertical = 1.dp),
-                color = AccentLight,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        }
         // Bawah: genre · rating usia · tahun · durasi (seperti di halaman info)
-        val info = mergeInfo(item, tmdb, null, null)
         Column(
             Modifier
                 .align(Alignment.BottomStart)
@@ -216,9 +239,10 @@ fun TitleRow(
     onOpen: (Title) -> Unit,
     onDetails: (Title) -> Unit,
     top10: Boolean = false,
+    onMore: (() -> Unit)? = null,
 ) {
     Column {
-        SectionTitle(title)
+        RowHeader(title, onMore)
         LazyRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),

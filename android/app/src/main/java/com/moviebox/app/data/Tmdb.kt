@@ -129,7 +129,7 @@ object Tmdb {
         }
 
     /** Judul per genre (populer, cukup banyak penilaian) — supaya isi kategori sesuai genrenya. */
-    suspend fun byGenre(label: String, series: Boolean, page: Int): List<Title> = withContext(Dispatchers.IO) {
+    suspend fun byGenre(label: String, series: Boolean, page: Int, year: Int? = null): List<Title> = withContext(Dispatchers.IO) {
         if (!enabled) return@withContext emptyList()
         val ids = Genres.tmdbFor(label, series) ?: return@withContext emptyList()
         val params = mutableMapOf(
@@ -140,8 +140,30 @@ object Tmdb {
             "with_genres" to ids,
             "page" to page.toString(),
         )
+        if (year != null) params[if (series) "first_air_date_year" else "primary_release_year"] = year.toString()
         if (label == "Anime") params["with_original_language"] = "ja"
         if (label == "Animasi") params["without_original_language"] = "ja"
+        parseResults(runCatching { get("/discover/${if (series) "tv" else "movie"}", params) }.getOrNull(), series)
+    }
+
+    /** Daftar lengkap Lokal/Global (terbaru dulu), opsional per tahun — untuk halaman "Lainnya". */
+    suspend fun discover(series: Boolean, local: Boolean, year: Int?, page: Int): List<Title> = withContext(Dispatchers.IO) {
+        if (!enabled) return@withContext emptyList()
+        val dateKey = if (series) "first_air_date" else "primary_release_date"
+        val params = mutableMapOf(
+            "language" to "id-ID",
+            "sort_by" to if (year != null) "popularity.desc" else "$dateKey.desc",
+            "include_adult" to "false",
+            "$dateKey.lte" to java.time.LocalDate.now().toString(),
+            "page" to page.toString(),
+        )
+        if (year != null) params[if (series) "first_air_date_year" else "primary_release_year"] = year.toString()
+        if (local) {
+            params["with_origin_country"] = "ID"
+        } else {
+            params["without_origin_country"] = "ID"
+            params["vote_count.gte"] = if (series) "20" else "50"
+        }
         parseResults(runCatching { get("/discover/${if (series) "tv" else "movie"}", params) }.getOrNull(), series)
     }
 
@@ -274,6 +296,30 @@ object Tmdb {
             val d = get("/${if (t.isSeries) "tv" else "movie"}/$id", mapOf("language" to "en-US"))
             d.str("title") ?: d.str("name") ?: d.str("original_title") ?: d.str("original_name")
         }.getOrNull()
+    }
+
+    /**
+     * Semua nama lain sebuah judul (Inggris, asli, judul alternatif per negara) —
+     * MovieBox sering memakai judul Inggris, mis. "Teluh Darah" = "Blood Curse".
+     */
+    suspend fun altTitles(t: Title): List<String> = withContext(Dispatchers.IO) {
+        if (!enabled) return@withContext emptyList()
+        val type = if (t.isSeries) "tv" else "movie"
+        runCatching {
+            val id = findId(t, type) ?: return@runCatching emptyList()
+            val out = linkedSetOf<String>()
+            val en = get("/$type/$id", mapOf("language" to "en-US"))
+            listOfNotNull(en.str("title"), en.str("name"), en.str("original_title"), en.str("original_name"))
+                .forEach { out += it }
+            val alt = runCatching { get("/$type/$id/alternative_titles", emptyMap()) }.getOrNull()
+            val list = (alt?.optJSONArray("titles") ?: alt?.optJSONArray("results")).objects()
+            val order = listOf("US", "GB", "ID", "AU", "CA")
+            list.sortedBy { o -> order.indexOf(o.str("iso_3166_1")).let { if (it < 0) 99 else it } }
+                .mapNotNull { it.str("title") }
+                .take(8)
+                .forEach { out += it }
+            out.filter { it.isNotBlank() }
+        }.getOrDefault(emptyList())
     }
 
     /** Samakan label rating usia ke gaya Indonesia. */
