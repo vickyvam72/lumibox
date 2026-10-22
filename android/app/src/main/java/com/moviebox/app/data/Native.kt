@@ -14,6 +14,7 @@ object Native {
     @JvmStatic external fun warmup(): String
     @JvmStatic external fun homepage(tabId: String, page: Int): String
     @JvmStatic external fun search(query: String, page: Int): String
+    @JvmStatic external fun webSearch(query: String, page: Int): String
     @JvmStatic external fun details(subjectId: String): String
     @JvmStatic external fun streams(subjectId: String, season: Int, episode: Int): String
     @JvmStatic external fun captions(subjectId: String, resourceId: String, season: Int, episode: Int): String

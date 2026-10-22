@@ -311,6 +311,10 @@ class PlayerActivity : ComponentActivity() {
                         break
                     }
                 }
+                if (found.isNullOrEmpty()) {
+                    lastDebug = (lastDebug ?: "") + "\n--- entri lain dengan judul sama: " +
+                        (if (alts.isEmpty()) "tidak ditemukan" else alts.joinToString())
+                }
             }
             if (found.isNullOrEmpty()) {
                 showError(lastErrorMessage ?: "Video tidak tersedia untuk judul ini.")

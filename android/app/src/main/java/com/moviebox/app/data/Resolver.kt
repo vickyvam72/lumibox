@@ -70,8 +70,9 @@ object Resolver {
         val results = runCatching { Repo.search(name) }.getOrDefault(emptyList())
         val wanted = normalize(name)
         val ranked = results
-            .filter { it.isSeries == t.isSeries && it.id !in exclude }
-            .map { it to score(wanted, t.year, it) }
+            .filter { it.id !in exclude }
+            // jenis (film/serial) kadang salah label di MovieBox → beda jenis tetap boleh, tapi nilainya dikurangi
+            .map { it to score(wanted, t.year, it) - if (it.isSeries == t.isSeries) 0 else 1 }
             .filter { it.second >= 3 }
             .sortedByDescending { it.second }
             .map { it.first.id }

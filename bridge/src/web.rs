@@ -258,14 +258,176 @@ impl WebEngine {
 
     async fn detail_path_cached(&self, subject_id: &str) -> Result<String, String> {
         if let Some(p) = self.detail_paths.lock().await.get(subject_id) {
-            return Ok(p.clone());
+            if !p.is_empty() {
+                return Ok(p.clone());
+            }
         }
         let p = self.detail_path(subject_id).await?;
-        self.detail_paths
-            .lock()
-            .await
-            .insert(subject_id.to_string(), p.clone());
+        if !p.is_empty() {
+            self.detail_paths
+                .lock()
+                .await
+                .insert(subject_id.to_string(), p.clone());
+        }
         Ok(p)
+    }
+
+    /// POST ke API native (api3.aoneroom.com) dengan identitas baru.
+    async fn native_post(&self, path: &str, body: &Value) -> Result<Value, String> {
+        let url = format!("{NATIVE_API_BASE}{path}");
+        let body_str = body.to_string();
+        for attempt in 0..2 {
+            let token = self.token(attempt > 0).await?;
+            let resp = self
+                .http
+                .post(&url)
+                .headers(self.native_headers("POST", &url, Some(&body_str), Some(&token)))
+                .body(body_str.clone())
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await
+                .map_err(|e| format!("request gagal: {}", short_err(&e)))?;
+            let status = resp.status().as_u16();
+            if (status == 401 || status == 441) && attempt == 0 {
+                continue;
+            }
+            if status != 200 {
+                return Err(format!("HTTP {status}"));
+            }
+            return resp.json::<Value>().await.map_err(|e| format!("JSON: {e}"));
+        }
+        Err("token ditolak".to_string())
+    }
+
+    /// POST pencarian ke situs web (sama seperti movieboxhd.net).
+    async fn web_search(&self, domain: &str, token: &str, keyword: &str, page: usize) -> Result<Value, String> {
+        let url = format!("{domain}/wefeed-h5api-bff/subject/search");
+        let mut h = HeaderMap::new();
+        put(&mut h, "user-agent", WEB_USER_AGENT);
+        put(&mut h, "referer", &format!("{domain}/"));
+        put(&mut h, "accept", "application/json");
+        put(&mut h, "content-type", "application/json");
+        put(&mut h, "x-client-info", r#"{"timezone":"Asia/Jakarta"}"#);
+        put(&mut h, "x-request-lang", "en");
+        put(&mut h, "x-source", "moviebox");
+        put(&mut h, "authorization", &format!("Bearer {token}"));
+        let body = json!({"keyword": keyword, "page": page, "perPage": 24, "subjectType": 0});
+        let resp = self
+            .http
+            .post(&url)
+            .headers(h)
+            .body(body.to_string())
+            .timeout(Duration::from_secs(8))
+            .send()
+            .await
+            .map_err(|e| short_err(&e).to_string())?;
+        let status = resp.status().as_u16();
+        if status != 200 {
+            return Err(format!("HTTP {status}"));
+        }
+        resp.json::<Value>().await.map_err(|e| format!("JSON: {e}"))
+    }
+
+    /// Ambil daftar subject dari jawaban pencarian (bentuk native & web sama: data.items[].subject).
+    fn search_items(&self, body: &Value, out: &mut Vec<Value>, paths: &mut Vec<(String, String)>) {
+        let data = body.get("data").unwrap_or(body);
+        let list = data
+            .get("items")
+            .or_else(|| data.get("subjects"))
+            .or_else(|| data.get("list"))
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for item in list {
+            let sub = item.get("subject").unwrap_or(&item);
+            let Some(id) = as_id(sub.get("subjectId")) else { continue };
+            if id == "0" {
+                continue;
+            }
+            let title = sub.get("title").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            if title.is_empty() {
+                continue;
+            }
+            let kind = as_u64(sub.get("subjectType")).unwrap_or(1);
+            let year: String = sub
+                .get("releaseDate")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .chars()
+                .take(4)
+                .collect();
+            let poster = sub
+                .get("cover")
+                .and_then(|c| c.get("url"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let path = sub.get("detailPath").and_then(|v| v.as_str()).unwrap_or("");
+            if !path.is_empty() {
+                paths.push((id.clone(), path.to_string()));
+            }
+            out.push(json!({
+                "id": id,
+                "title": title,
+                "media_type": if kind == 2 { "series" } else { "movie" },
+                "year": if year.is_empty() { Value::Null } else { json!(year) },
+                "poster_url": if poster.is_empty() { Value::Null } else { json!(poster) },
+                "detail_path": path,
+                "episodes": as_u64(sub.get("totalEpisode")).unwrap_or(0),
+            }));
+        }
+    }
+
+    /// Pencarian lewat aplikasi baru (api3) + semua domain web sekaligus.
+    /// Hasil web memuat entri yang tidak muncul di pencarian lama (mis. versi lengkap serial).
+    pub async fn search(&self, keyword: &str, page: usize) -> (Vec<Value>, Vec<String>) {
+        let mut lines = Vec::new();
+        let token = match self.token(false).await {
+            Ok(t) => t,
+            Err(e) => return (Vec::new(), vec![e]),
+        };
+        let native_body = json!({"keyword": keyword, "page": page, "perPage": 20});
+        let native = async {
+            let r = self
+                .native_post("/wefeed-mobile-bff/subject-api/search", &native_body)
+                .await;
+            ("native".to_string(), r)
+        };
+        let mut web: FuturesUnordered<_> = WEB_DOMAINS
+            .iter()
+            .map(|domain| {
+                let token = token.clone();
+                async move { (domain.to_string(), self.web_search(domain, &token, keyword, page).await) }
+            })
+            .collect();
+        let mut out = Vec::new();
+        let mut paths = Vec::new();
+        let (name, r) = native.await;
+        match r {
+            Ok(body) => self.search_items(&body, &mut out, &mut paths),
+            Err(e) => lines.push(format!("{name}: {e}")),
+        }
+        // Cukup satu domain web yang menjawab.
+        while let Some((domain, r)) = web.next().await {
+            match r {
+                Ok(body) => {
+                    let before = out.len();
+                    self.search_items(&body, &mut out, &mut paths);
+                    if out.len() > before {
+                        break;
+                    }
+                }
+                Err(e) => lines.push(format!("{domain}: {e}")),
+            }
+        }
+        if !paths.is_empty() {
+            let mut cache = self.detail_paths.lock().await;
+            for (id, p) in paths {
+                cache.entry(id).or_insert(p);
+            }
+        }
+        let mut seen = HashSet::new();
+        out.retain(|v| seen.insert(v.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string()));
+        (out, lines)
     }
 
     /// Siapkan token lebih awal supaya tombol putar pertama terasa cepat.

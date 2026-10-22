@@ -58,6 +58,7 @@ import coil.compose.AsyncImage
 import com.moviebox.app.data.Repo
 import com.moviebox.app.data.Title
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun SearchScreen(
@@ -83,14 +84,26 @@ fun SearchScreen(
         delay(450)
         loading = true
         error = null
-        try {
-            results = Repo.search(q)
-            if (results.isEmpty()) error = "Tidak ada hasil untuk \"$q\""
-        } catch (e: Exception) {
-            error = e.message ?: "Pencarian gagal"
-        } finally {
-            loading = false
+        results = emptyList()
+        // Dua sumber jalan bersamaan; hasil yang datang duluan langsung tampil.
+        var newList = emptyList<Title>()
+        var oldList = emptyList<Title>()
+        var failures = 0
+        var lastError: String? = null
+        kotlinx.coroutines.coroutineScope {
+            launch {
+                runCatching { Repo.searchNew(q) }
+                    .onSuccess { newList = it; results = Repo.rankResults(q, newList + oldList) }
+                    .onFailure { failures++; lastError = it.message }
+            }
+            launch {
+                runCatching { Repo.searchLegacy(q) }
+                    .onSuccess { oldList = it; results = Repo.rankResults(q, newList + oldList) }
+                    .onFailure { failures++; lastError = it.message }
+            }
         }
+        loading = false
+        if (results.isEmpty()) error = if (failures >= 2) (lastError ?: "Pencarian gagal") else "Tidak ada hasil untuk \"$q\""
     }
 
     Column(

@@ -170,6 +170,14 @@ pub fn search(query: &str, page: usize) -> String {
     })
 }
 
+/// Pencarian baru (api3 + web). Selalu ok; daftar bisa kosong, alasan di "debug".
+pub fn web_search(query: &str, page: usize) -> String {
+    RUNTIME.block_on(async {
+        let (items, lines) = web::ENGINE.search(query, page.max(1)).await;
+        json!({ "ok": true, "data": items, "debug": lines.join("\n") }).to_string()
+    })
+}
+
 pub fn details(subject_id: &str) -> String {
     RUNTIME.block_on(async {
         let raw = match SERVICE.client.get_details(subject_id).await {
@@ -506,6 +514,17 @@ pub extern "system" fn Java_com_moviebox_app_data_Native_search<'l>(
 ) -> jstring {
     let query = read(&mut env, &query);
     guarded(&mut env, || search(&query, as_usize(page)))
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_moviebox_app_data_Native_webSearch<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    query: JString<'l>,
+    page: jint,
+) -> jstring {
+    let query = read(&mut env, &query);
+    guarded(&mut env, || web_search(&query, as_usize(page)))
 }
 
 #[unsafe(no_mangle)]

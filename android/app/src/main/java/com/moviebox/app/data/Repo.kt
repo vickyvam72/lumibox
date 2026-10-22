@@ -53,22 +53,40 @@ object Repo {
         }
     }
 
-    suspend fun search(query: String, page: Int = 1): List<Title> = kotlinx.coroutines.coroutineScope {
-        // Aplikasi + web dicari bersamaan; hasil web (seperti movieboxhd.net) ditaruh di depan.
-        val web = async { runCatching { MovieBoxWeb.search(query, page) }.getOrDefault(emptyList()) }
-        val native = async(Dispatchers.IO) {
-            runCatching {
-                unwrapArray(Native.search(query, page)).objects().map(::parseTitle).filter { it.id.isNotBlank() }
-            }
+    private val searchCache = java.util.concurrent.ConcurrentHashMap<String, List<Title>>()
+
+    /** Pencarian lama (core). */
+    suspend fun searchLegacy(query: String, page: Int = 1): List<Title> = withContext(Dispatchers.IO) {
+        unwrapArray(Native.search(query, page)).objects().map(::parseTitle).filter { it.id.isNotBlank() }
+    }
+
+    /** Pencarian baru: aplikasi MovieBox terbaru + situs web (seperti movieboxhd.net). */
+    suspend fun searchNew(query: String, page: Int = 1): List<Title> = withContext(Dispatchers.IO) {
+        val root = JSONObject(Native.webSearch(query, page))
+        root.optJSONArray("data").objects().map(::parseTitle).filter { it.id.isNotBlank() }
+    }
+
+    /** Urutkan: judul yang memuat semua kata kunci paling atas. */
+    fun rankResults(query: String, list: List<Title>): List<Title> {
+        val words = query.lowercase().split(Regex("\\s+")).filter { it.isNotBlank() }
+        val q = query.trim().lowercase()
+        return list.distinctBy { it.id }.sortedByDescending { t ->
+            val n = t.title.lowercase()
+            (if (n == q) 100 else 0) + (if (n.startsWith(q)) 50 else 0) + words.count { n.contains(it) } * 10
         }
-        val w = web.await()
-        val n = native.await()
-        if (w.isEmpty() && n.isFailure) throw n.exceptionOrNull()!!
-        val words = query.lowercase().split(Regex("\\s+")).filter { it.length > 1 }
-        // Judul yang memuat semua kata kunci diurutkan paling atas.
-        (w + n.getOrDefault(emptyList()))
-            .distinctBy { it.id }
-            .sortedByDescending { t -> words.count { t.title.lowercase().contains(it) } }
+    }
+
+    suspend fun search(query: String, page: Int = 1): List<Title> = kotlinx.coroutines.coroutineScope {
+        val key = "$query|$page"
+        searchCache[key]?.let { return@coroutineScope it }
+        val fresh = async { runCatching { searchNew(query, page) }.getOrDefault(emptyList()) }
+        val old = async { runCatching { searchLegacy(query, page) } }
+        val n = fresh.await()
+        val o = old.await()
+        if (n.isEmpty() && o.isFailure) throw o.exceptionOrNull()!!
+        val merged = rankResults(query, n + o.getOrDefault(emptyList()))
+        if (merged.isNotEmpty()) searchCache[key] = merged
+        merged
     }
 
     private val detailsCache = java.util.concurrent.ConcurrentHashMap<String, Details>()
