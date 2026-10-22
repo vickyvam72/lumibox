@@ -46,6 +46,10 @@ object ContentFilter {
     private val shortDramaGenres = setOf("modern drama", "short drama", "mini drama")
 
     fun isIndian(t: Title): Boolean {
+        Tmdb.cached(t)?.let { info ->
+            if (info.originalLanguage?.lowercase() in indianLanguages) return true
+            if (info.originCountry.equals("IN", true)) return true
+        }
         if (t.lang != null && t.lang.lowercase() in indianLanguages) return true
         val c = t.country?.lowercase()
         if (c != null && (c == "in" || c.contains("india"))) return true

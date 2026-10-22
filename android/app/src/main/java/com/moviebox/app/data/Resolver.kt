@@ -46,6 +46,8 @@ object Resolver {
             return known
         }
         val names = linkedSetOf(t.title)
+        // Judul alternatif TMDB disiapkan bersamaan dengan pencarian pertama (hemat waktu).
+        val altsJob = bg.async { runCatching { Tmdb.altTitles(t) }.getOrDefault(emptyList()) }
         var match = findMatch(t.title, t)
         if (match == null && t.imdbId != null && t.imdbId.startsWith("tt")) {
             val original = Addon.originalName(if (t.isSeries) "series" else "movie", t.imdbId)
@@ -53,12 +55,12 @@ object Resolver {
         }
         if (match == null) {
             // Judul Inggris / asli / alternatif dari TMDB (mis. "Teluh Darah" → "Blood Curse")
-            for (alt in Tmdb.altTitles(t)) {
-                if (!names.add(alt)) continue
-                match = findMatch(alt, t)
-                if (match != null) break
-                if (names.size > 6) break
+            val alts = altsJob.await().filter { names.add(it) }.take(5)
+            // Semua nama alternatif dicari bersamaan; yang pertama (urutan prioritas) cocok dipakai.
+            val found = kotlinx.coroutines.coroutineScope {
+                alts.map { alt -> async { findMatch(alt, t) } }.map { it.await() }
             }
+            match = found.firstOrNull { it != null }
         }
         if (match == null) throw IOException("\"${t.title}\" belum tersedia di MovieBox.")
         cacheKey(t)?.let { prefs.edit().putString(it, match).apply() }
@@ -69,8 +71,25 @@ object Resolver {
         candidates(name, t, exclude).firstOrNull()
 
     /** Kandidat subject yang cocok, yang paling cocok dulu; serial kosong (0 episode) ditaruh paling akhir. */
+    private val bg = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+
+    /**
+     * Cari di dua jalur. Jalur lama biasanya cepat: kalau di sana sudah ada film yang judul
+     * & tahunnya persis sama, tidak perlu menunggu jalur web (yang bisa sampai 10 detik).
+     */
+    private suspend fun searchFast(name: String, t: Title): List<Title> {
+        val fresh = bg.async { runCatching { Repo.searchNew(name) }.getOrDefault(emptyList()) }
+        val legacy = runCatching { Repo.searchLegacy(name) }.getOrDefault(emptyList())
+        if (!t.isSeries) {
+            val wanted = normalize(name)
+            val sure = legacy.any { it.isSeries == t.isSeries && score(wanted, t.year, it) >= 6 }
+            if (sure) return legacy
+        }
+        return Repo.rankResults(name, fresh.await() + legacy)
+    }
+
     private suspend fun candidates(name: String, t: Title, exclude: Set<String>): List<String> {
-        val results = runCatching { Repo.search(name) }.getOrDefault(emptyList())
+        val results = searchFast(name, t)
         val wanted = normalize(name)
         val ranked = results
             .filter { it.id !in exclude }

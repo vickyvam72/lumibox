@@ -72,6 +72,25 @@ fun SearchScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var submitTick by remember { mutableIntStateOf(0) }
     var searchDebug by remember { mutableStateOf<String?>(null) }
+    // Hasil yang ternyata (menurut TMDB) film India / drama pendek → disembunyikan sesuai Setting.
+    var hidden by remember { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(results, com.moviebox.app.data.ContentFilter.showIndian, com.moviebox.app.data.Tmdb.enabled) {
+        if (com.moviebox.app.data.ContentFilter.showIndian || !com.moviebox.app.data.Tmdb.enabled) return@LaunchedEffect
+        val limit = kotlinx.coroutines.sync.Semaphore(4)
+        kotlinx.coroutines.coroutineScope {
+            results.take(30).forEach { t ->
+                launch {
+                    limit.acquire()
+                    try {
+                        com.moviebox.app.data.Tmdb.info(t)
+                        if (!com.moviebox.app.data.ContentFilter.allows(t)) hidden = hidden + t.key
+                    } finally {
+                        limit.release()
+                    }
+                }
+            }
+        }
+    }
     val keyboard = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(query, submitTick) {
@@ -183,7 +202,7 @@ fun SearchScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        items(com.moviebox.app.data.ContentFilter.apply(results).distinctBy { it.key }, key = { it.key }) { item ->
+                        items(com.moviebox.app.data.ContentFilter.apply(results).filter { it.key !in hidden }.distinctBy { it.key }, key = { it.key }) { item ->
                             Poster(
                                 item = item,
                                 onClick = { onOpen(item) },

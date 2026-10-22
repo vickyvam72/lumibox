@@ -8,6 +8,11 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
@@ -57,6 +62,11 @@ import com.moviebox.app.ui.SearchScreen
 import com.moviebox.app.ui.TextDim
 
 class MainActivity : ComponentActivity() {
+    override fun onStop() {
+        super.onStop()
+        com.moviebox.app.data.Crash.markStable(this)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
@@ -72,11 +82,33 @@ class MainActivity : ComponentActivity() {
                 c.episode,
             )
         }
+        // Sudah tampil normal 8 detik → pembukaan ini dianggap berhasil.
+        window.decorView.postDelayed({ com.moviebox.app.data.Crash.markStable(this) }, 8_000)
+        if (com.moviebox.app.data.Crash.consumeRecovered(this)) {
+            android.widget.Toast.makeText(
+                this,
+                "Lumi Box sempat gagal dibuka, cache sudah dibersihkan otomatis.",
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
         setContent {
             LumiTheme {
-                LumiApp()
-                CrashReportDialog()
-                com.moviebox.app.ui.TogetherDialog()
+                // Laporan crash ditampilkan SEBELUM beranda dimuat, supaya tetap bisa disalin
+                // walaupun beranda sendiri yang membuat crash.
+                var showReport by androidx.compose.runtime.remember {
+                    androidx.compose.runtime.mutableStateOf(com.moviebox.app.data.Crash.last(this@MainActivity) != null)
+                }
+                if (showReport) {
+                    androidx.compose.foundation.layout.Box(
+                        Modifier
+                            .fillMaxSize()
+                            .background(Color.Black),
+                    )
+                    CrashReportDialog(onDone = { showReport = false })
+                } else {
+                    LumiApp()
+                    com.moviebox.app.ui.TogetherDialog()
+                }
             }
         }
     }
@@ -251,10 +283,13 @@ private fun BottomBar(nav: NavHostController, route: String?) {
 
 /** Kalau aplikasi sempat berhenti mendadak, tampilkan laporannya supaya bisa disalin & dikirim. */
 @Composable
-private fun CrashReportDialog() {
+private fun CrashReportDialog(onDone: () -> Unit) {
     val context = LocalContext.current
     var report by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(com.moviebox.app.data.Crash.last(context)) }
-    val text = report ?: return
+    val text = report ?: run {
+        androidx.compose.runtime.LaunchedEffect(Unit) { onDone() }
+        return
+    }
     androidx.compose.material3.AlertDialog(
         onDismissRequest = {
             com.moviebox.app.data.Crash.clear(context)
@@ -262,9 +297,15 @@ private fun CrashReportDialog() {
         },
         title = { Text("Aplikasi sempat berhenti") },
         text = {
-            Text(
-                "Lumi Box tertutup mendadak sebelumnya. Salin laporan ini dan kirim ke pengembang supaya bisa diperbaiki.",
-            )
+            Column {
+                Text("Lumi Box tertutup mendadak sebelumnya. Salin laporan ini dan kirim ke pengembang supaya bisa diperbaiki.")
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text.lines().take(4).joinToString("\n"),
+                    fontSize = 11.sp,
+                    color = Color.Gray,
+                )
+            }
         },
         confirmButton = {
             androidx.compose.material3.TextButton(onClick = {

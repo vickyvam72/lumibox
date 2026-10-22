@@ -13,6 +13,7 @@ class App : Application() {
     override fun onCreate() {
         super.onCreate()
         com.moviebox.app.data.Crash.install(this)
+        com.moviebox.app.data.Crash.safeStart(this)
         // Arahkan folder config/cache core Rust ke folder privat aplikasi.
         val result = Native.initCore(filesDir.absolutePath, cacheDir.absolutePath)
         Log.i("LumiBox", "core init: $result")

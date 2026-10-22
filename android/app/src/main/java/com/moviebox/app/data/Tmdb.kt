@@ -25,6 +25,8 @@ data class TmdbInfo(
     val score: String?,
     val ageRating: String?,
     val runtimeMin: Int?,
+    val originalLanguage: String? = null,
+    val originCountry: String? = null,
 )
 
 /**
@@ -291,6 +293,9 @@ object Tmdb {
             score = score,
             ageRating = age?.let(::ageLabel),
             runtimeMin = runtime,
+            originalLanguage = originalLang,
+            originCountry = detail.optJSONArray("origin_country")?.optString(0)?.takeIf { it.isNotBlank() }
+                ?: detail.optJSONArray("production_countries").objects().firstOrNull()?.str("iso_3166_1"),
         )
     }
 
