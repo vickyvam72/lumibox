@@ -556,6 +556,7 @@ impl WebEngine {
         season: usize,
         episode: usize,
         diag: &mut Vec<String>,
+        full: bool,
     ) -> Vec<Value> {
         let web = async {
             let mut lines = Vec::new();
@@ -635,7 +636,8 @@ impl WebEngine {
             let found = web_r.as_ref().is_some_and(|r| !r.0.is_empty())
                 || native_r.as_ref().is_some_and(|r| !r.0.is_empty())
                 || apig_r.as_ref().is_some_and(|r| !r.0.is_empty());
-            if found && !grace_on {
+            // full = semua jalur ditunggu (dipakai kalau link dari jalur cepat ternyata ditolak server)
+            if found && !grace_on && !full {
                 grace_on = true;
                 grace.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(1500));
             }

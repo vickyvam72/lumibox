@@ -144,8 +144,14 @@ object Repo {
     }
 
     suspend fun streams(id: String, season: Int, episode: Int): List<Stream> =
-        withContext(Dispatchers.IO) {
-            unwrapArray(Native.streams(id, season, episode)).objects().mapNotNull { s ->
+        withContext(Dispatchers.IO) { parseStreams(Native.streams(id, season, episode)) }
+
+    /** Minta ulang dari semua jalur (tanpa cache) — kalau link sebelumnya ditolak server video. */
+    suspend fun streamsFull(id: String, season: Int, episode: Int): List<Stream> =
+        withContext(Dispatchers.IO) { parseStreams(Native.streamsFull(id, season, episode)) }
+
+    private fun parseStreams(raw: String): List<Stream> =
+            unwrapArray(raw).objects().mapNotNull { s ->
                 val url = s.str("url") ?: return@mapNotNull null
                 val headers = s.optJSONArray("headers").arrays().mapNotNull { pair ->
                     if (pair.length() >= 2) pair.optString(0) to pair.optString(1) else null
@@ -161,7 +167,6 @@ object Repo {
                     durationSec = if (s.isNull("durationSec")) null else s.optLong("durationSec").takeIf { it > 0 },
                 )
             }
-        }
 
     suspend fun captions(id: String, resourceId: String?, season: Int, episode: Int): List<Caption> =
         withContext(Dispatchers.IO) {

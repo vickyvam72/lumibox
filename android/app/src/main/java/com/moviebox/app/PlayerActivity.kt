@@ -197,6 +197,9 @@ class PlayerActivity : ComponentActivity() {
         readyOnce = false
         errorMessage = null
         mismatchBlocked = false
+        failedUrls.clear()
+        errorLog.clear()
+        refetchedFull = false
         loadingMessage = "Menyiapkan video…"
         loadJob = lifecycleScope.launch {
             // 0) File unduhan: putar offline.
@@ -528,16 +531,45 @@ class PlayerActivity : ComponentActivity() {
 
         override fun onPlayerError(error: PlaybackException) {
             val position = player.currentPosition.coerceAtLeast(0L)
+            streams.getOrNull(streamIndex)?.let { failedUrls += it.url }
+            val code = generateSequence(error as Throwable?) { it.cause }
+                .filterIsInstance<androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException>()
+                .firstOrNull()?.responseCode
+            errorLog += "${streams.getOrNull(streamIndex)?.label ?: "?"}: ${error.errorCodeName}" + (code?.let { " (HTTP $it)" } ?: "")
             if (streamIndex + 1 < streams.size) {
                 streamIndex += 1
                 readyOnce = false
                 playCurrent(position)
+            } else if (!refetchedFull && playId.isNotBlank()) {
+                // Semua link ditolak → minta ulang dari SEMUA jalur MovieBox, pakai yang belum dicoba.
+                refetchedFull = true
+                loadingMessage = "Mencari link lain…"
+                lifecycleScope.launch {
+                    val fresh = runCatching { Repo.streamsFull(playId, season, episode) }.getOrNull().orEmpty()
+                        .filter { it.url !in failedUrls }
+                    if (fresh.isNotEmpty()) {
+                        streams = rank(fresh)
+                        streamIndex = 0
+                        readyOnce = false
+                        playCurrent(position)
+                    } else {
+                        failAll(error)
+                    }
+                }
             } else {
-                lastDebug = "Error pemutar: ${error.errorCodeName}\n" +
-                    streams.joinToString("\n") { "- ${it.label}" }
-                showError("Video tidak bisa diputar (${error.errorCodeName}).")
+                failAll(error)
             }
         }
+    }
+
+    private val failedUrls = mutableSetOf<String>()
+    private val errorLog = mutableListOf<String>()
+    private var refetchedFull = false
+
+    private fun failAll(error: PlaybackException) {
+        lastDebug = "Error pemutar: ${error.errorCodeName}\n" + errorLog.joinToString("\n") { "- $it" } +
+            (lastDebug?.let { "\n\n$it" } ?: "")
+        showError("Video tidak bisa diputar (${error.errorCodeName}).")
     }
 
     private fun onEnded() {

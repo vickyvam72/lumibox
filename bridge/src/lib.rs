@@ -292,7 +292,7 @@ pub fn streams(subject_id: &str, season: usize, episode: usize) -> String {
             }
         }
     }
-    let result = RUNTIME.block_on(streams_uncached(subject_id, season, episode));
+    let result = RUNTIME.block_on(streams_uncached(subject_id, season, episode, false));
     if result.starts_with("{\"ok\":true") {
         if let Ok(mut cache) = STREAM_CACHE.lock() {
             cache.retain(|_, (at, _)| at.elapsed() < STREAM_TTL);
@@ -309,17 +309,38 @@ pub fn warmup() -> String {
     ok(json!(true))
 }
 
-async fn streams_uncached(subject_id: &str, season: usize, episode: usize) -> String {
+/// Minta ulang dari SEMUA jalur (tanpa cache & tanpa jalan pintas). Dipakai pemutar kalau
+/// semua link sebelumnya ditolak server video.
+pub fn streams_full(subject_id: &str, season: usize, episode: usize) -> String {
+    let key = format!("{subject_id}:{season}:{episode}");
+    if let Ok(mut cache) = STREAM_CACHE.lock() {
+        cache.remove(&key);
+    }
+    RUNTIME.block_on(streams_uncached(subject_id, season, episode, true))
+}
+
+async fn streams_uncached(subject_id: &str, season: usize, episode: usize, full: bool) -> String {
     let mut diag = vec![format!(
         "subjectId={subject_id} season={season} episode={episode}"
     )];
 
     // 1) Jalur baru (port dari Moviebox-API): web H5 paralel + play-info identitas baru.
     let fresh = web::ENGINE
-        .streams(subject_id, season, episode, &mut diag)
+        .streams(subject_id, season, episode, &mut diag, full)
         .await;
-    if !fresh.is_empty() {
+    if !fresh.is_empty() && !full {
         return ok(json!(sort_streams(fresh)));
+    }
+    if full {
+        // Mode lengkap: link jalur lama (core) ikut ditambahkan sebagai cadangan.
+        let mut all = fresh;
+        diag.push("--- jalur lama (core, mode lengkap) ---".to_string());
+        if let Some(list) = legacy_streams(subject_id, season, episode, &mut diag).await {
+            all.extend(list);
+        }
+        if !all.is_empty() {
+            return ok(json!(all));
+        }
     }
 
     // 2) Cadangan: jalur lama core.
@@ -548,6 +569,20 @@ pub extern "system" fn Java_com_moviebox_app_data_Native_streams<'l>(
     let subject_id = read(&mut env, &subject_id);
     guarded(&mut env, || {
         streams(&subject_id, as_usize(season), as_usize(episode))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_moviebox_app_data_Native_streamsFull<'l>(
+    mut env: JNIEnv<'l>,
+    _class: JClass<'l>,
+    subject_id: JString<'l>,
+    season: jint,
+    episode: jint,
+) -> jstring {
+    let subject_id = read(&mut env, &subject_id);
+    guarded(&mut env, || {
+        streams_full(&subject_id, as_usize(season), as_usize(episode))
     })
 }
 
