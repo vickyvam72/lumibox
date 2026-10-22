@@ -77,19 +77,26 @@ object Resolver {
      * Cari di dua jalur. Jalur lama biasanya cepat: kalau di sana sudah ada film yang judul
      * & tahunnya persis sama, tidak perlu menunggu jalur web (yang bisa sampai 10 detik).
      */
-    private suspend fun searchFast(name: String, t: Title): List<Title> {
+    private suspend fun searchFast(name: String, t: Title, full: Boolean = false): List<Title> {
         val fresh = bg.async { runCatching { Repo.searchNew(name) }.getOrDefault(emptyList()) }
         val legacy = runCatching { Repo.searchLegacy(name) }.getOrDefault(emptyList())
-        if (!t.isSeries) {
+        if (!full) {
             val wanted = normalize(name)
-            val sure = legacy.any { it.isSeries == t.isSeries && score(wanted, t.year, it) >= 6 }
-            if (sure) return legacy
+            val sure = legacy.filter { it.isSeries == t.isSeries && score(wanted, t.year, it) >= 6 }
+            if (sure.isNotEmpty()) {
+                if (!t.isSeries) return legacy
+                // Serial: pastikan entri yang cocok memang punya episode (ada entri kembar yang kosong)
+                val withEpisodes = sure.take(2).any { c ->
+                    runCatching { Repo.details(c.id) }.getOrNull()?.seasons?.any { it.episodes.isNotEmpty() } == true
+                }
+                if (withEpisodes) return legacy
+            }
         }
         return Repo.rankResults(name, fresh.await() + legacy)
     }
 
-    private suspend fun candidates(name: String, t: Title, exclude: Set<String>): List<String> {
-        val results = searchFast(name, t)
+    private suspend fun candidates(name: String, t: Title, exclude: Set<String>, full: Boolean = false): List<String> {
+        val results = searchFast(name, t, full)
         val wanted = normalize(name)
         val ranked = results
             .filter { it.id !in exclude }
@@ -115,7 +122,7 @@ object Resolver {
         if (t.title.isNotBlank()) names += t.title
         names += Tmdb.altTitles(t).take(3)
         for (n in names) {
-            out += candidates(n, t, exclude + out)
+            out += candidates(n, t, exclude + out, full = true)
             if (out.size >= 4) break
         }
         return out.toList().take(4)

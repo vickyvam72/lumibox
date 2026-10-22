@@ -594,8 +594,38 @@ impl WebEngine {
 
         let native = self.native_play(subject_id, season, episode);
         let apig = crate::apig::streams(self, subject_id, season, episode);
-        let ((web_items, web_lines), (native_items, native_line), (apig_items, apig_lines)) =
-            tokio::join!(web, native, apig);
+        tokio::pin!(web, native, apig);
+
+        // Balapan: begitu satu jalur dapat video, jalur lain hanya ditunggu 1,5 detik lagi
+        // (domain yang tidak bisa tersambung tidak perlu ditunggu sampai batas waktunya).
+        let mut web_r: Option<(Vec<Value>, Vec<String>)> = None;
+        let mut native_r: Option<(Vec<Value>, String)> = None;
+        let mut apig_r: Option<(Vec<Value>, Vec<String>)> = None;
+        let grace = tokio::time::sleep(Duration::from_secs(3600));
+        tokio::pin!(grace);
+        let mut grace_on = false;
+        loop {
+            tokio::select! {
+                r = &mut web, if web_r.is_none() => web_r = Some(r),
+                r = &mut native, if native_r.is_none() => native_r = Some(r),
+                r = &mut apig, if apig_r.is_none() => apig_r = Some(r),
+                _ = &mut grace, if grace_on => break,
+            }
+            if web_r.is_some() && native_r.is_some() && apig_r.is_some() {
+                break;
+            }
+            let found = web_r.as_ref().is_some_and(|r| !r.0.is_empty())
+                || native_r.as_ref().is_some_and(|r| !r.0.is_empty())
+                || apig_r.as_ref().is_some_and(|r| !r.0.is_empty());
+            if found && !grace_on {
+                grace_on = true;
+                grace.as_mut().reset(tokio::time::Instant::now() + Duration::from_millis(1500));
+            }
+        }
+        let skipped = "(dilewati: sumber lain sudah ditemukan)";
+        let (web_items, web_lines) = web_r.unwrap_or_else(|| (Vec::new(), vec![format!("web {skipped}")]));
+        let (native_items, native_line) = native_r.unwrap_or_else(|| (Vec::new(), format!("native {skipped}")));
+        let (apig_items, apig_lines) = apig_r.unwrap_or_else(|| (Vec::new(), vec![format!("apig {skipped}")]));
         diag.extend(web_lines);
         diag.push(native_line);
         diag.extend(apig_lines);
