@@ -64,6 +64,58 @@ object MovieBoxWeb {
         return items
     }
 
+    /**
+     * Pencarian versi web (sama seperti movieboxhd.net / moviebox.ph). Hasilnya kadang berbeda
+     * dengan pencarian aplikasi, mis. "90 Hari Mencari Suami" hanya ada versi lengkapnya di sini.
+     */
+    suspend fun search(keyword: String, page: Int = 1, perPage: Int = 24): List<Title> {
+        val key = "search|$keyword|$page"
+        cache[key]?.let { return it }
+        val body = JSONObject().put("keyword", keyword).put("page", page).put("perPage", perPage).put("subjectType", 0)
+        val endpoints = listOf(
+            "$API/subject/search",
+            "https://h5.aoneroom.com/wefeed-h5-bff/web/subject/search",
+        )
+        var items: List<Title> = emptyList()
+        for (url in endpoints) {
+            items = withContext(Dispatchers.IO) {
+                runCatching { parseSubjects(post(url, body), null) }.getOrDefault(emptyList())
+            }
+            if (items.isNotEmpty()) break
+        }
+        if (items.isEmpty()) {
+            // Cadangan: saran pencarian (berisi subjectId juga)
+            items = withContext(Dispatchers.IO) {
+                runCatching {
+                    parseSubjects(post("$API/subject/search-suggest", JSONObject().put("keyword", keyword).put("perPage", 10)), null)
+                }.getOrDefault(emptyList())
+            }
+        }
+        items = items.filterNot { isDubbed(it.title) }.distinctBy { it.id }
+        if (items.isNotEmpty()) cache[key] = items
+        return items
+    }
+
+    private fun parseSubjects(json: JSONObject, tabId: Int?): List<Title> {
+        val data = json.optJSONObject("data") ?: JSONObject()
+        val arr = data.optJSONArray("items") ?: data.optJSONArray("subjects") ?: data.optJSONArray("list")
+        return arr.objects().mapNotNull { o ->
+            val s = o.optJSONObject("subject") ?: o
+            val id = s.opt("subjectId")?.toString()?.takeIf { it.isNotBlank() && it != "null" && it != "0" }
+                ?: return@mapNotNull null
+            val title = s.str("title") ?: return@mapNotNull null
+            Title(
+                id = id,
+                title = title,
+                isSeries = s.optInt("subjectType", if (tabId == TAB_SERIES) 2 else 1) == 2,
+                year = s.str("releaseDate")?.take(4),
+                poster = s.optJSONObject("cover")?.str("url"),
+                rating = s.str("imdbRatingValue"),
+                genres = Genres.normalize(listOfNotNull(s.str("genre"))),
+            )
+        }
+    }
+
     private val dubTags = listOf("hindi", "tamil", "telugu", "bengali", "kannada", "malayalam", "dub")
 
     private fun isDubbed(title: String): Boolean {

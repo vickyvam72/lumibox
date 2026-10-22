@@ -145,6 +145,27 @@ class CategoryViewModel(private val row: HomeRow) : ViewModel() {
         return list
     }
 
+    private var viaTmdb = false
+
+    /**
+     * Ambil halaman TMDB berikutnya, sisakan hanya yang ada di MovieBox.
+     * Kalau satu halaman habis tersaring, lanjut halaman berikutnya (maks. 4).
+     */
+    private suspend fun tmdbPages(y: Int?): List<Title> {
+        viaTmdb = true
+        repeat(4) {
+            page += 1
+            val raw = Tmdb.discover(row.isSeries, row.local, y, page)
+            if (raw.isEmpty()) {
+                endReached = true
+                return emptyList()
+            }
+            val ok = com.moviebox.app.data.Resolver.filterAvailable(raw)
+            if (ok.isNotEmpty()) return ok
+        }
+        return emptyList()
+    }
+
     fun loadMore() {
         if (loading || endReached) return
         loading = true
@@ -152,13 +173,12 @@ class CategoryViewModel(private val row: HomeRow) : ViewModel() {
         val y = year
         job = viewModelScope.launch {
             try {
+                viaTmdb = false
                 val fresh = mutableListOf<Title>()
                 val known = items.map { it.key }.toMutableSet()
                 if (y != null && Tmdb.enabled) {
                     // Per tahun: TMDB lebih lengkap
-                    page += 1
-                    fresh += Tmdb.discover(row.isSeries, row.local, y, page)
-                    if (fresh.isEmpty()) endReached = true
+                    fresh += tmdbPages(y)
                 } else if (!useTmdb) {
                     // Katalog addon (sama seperti beranda), disaring per tahun kalau dipilih
                     var tries = 0
@@ -173,14 +193,10 @@ class CategoryViewModel(private val row: HomeRow) : ViewModel() {
                     }
                     if (fresh.isEmpty() && !useTmdb) endReached = true
                     if (useTmdb) {
-                        page += 1
-                        fresh += Tmdb.discover(row.isSeries, row.local, y, page)
-                        if (fresh.isEmpty()) endReached = true
+                        fresh += tmdbPages(y)
                     }
                 } else {
-                    page += 1
-                    fresh += Tmdb.discover(row.isSeries, row.local, y, page)
-                    if (fresh.isEmpty()) endReached = true
+                    fresh += tmdbPages(y)
                 }
                 val add = fresh.filter { known.add(it.key) && !Library.isDisliked(it) }
                 items = items + add

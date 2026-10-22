@@ -3,6 +3,8 @@ package com.moviebox.app.data
 import android.content.Context
 import android.content.SharedPreferences
 import java.io.IOException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.withPermit
 import java.text.Normalizer
 
 /**
@@ -92,6 +94,28 @@ object Resolver {
             if (out.size >= 4) break
         }
         return out.toList().take(4)
+    }
+
+    private val checkLimit = kotlinx.coroutines.sync.Semaphore(6)
+    private const val MISS_TTL = 6 * 60 * 60 * 1000L
+
+    /** Sudah pasti ada di MovieBox (tersimpan dari pencarian sebelumnya)? */
+    fun knownAvailable(t: Title): Boolean = cached(t) != null
+
+    /** Cek judul memang ada di MovieBox (hasil disimpan; yang tidak ada dicek ulang 6 jam lagi). */
+    suspend fun available(t: Title): Boolean {
+        if (cached(t) != null) return true
+        val key = cacheKey(t) ?: return true
+        val missAt = prefs.getLong("miss:$key", 0L)
+        if (System.currentTimeMillis() - missAt < MISS_TTL) return false
+        val ok = checkLimit.withPermit { runCatching { subjectId(t) }.isSuccess }
+        if (!ok) prefs.edit().putLong("miss:$key", System.currentTimeMillis()).apply()
+        return ok
+    }
+
+    /** Saring daftar: hanya judul yang ada di MovieBox, urutan tetap. */
+    suspend fun filterAvailable(list: List<Title>): List<Title> = kotlinx.coroutines.coroutineScope {
+        list.map { t -> async { t to available(t) } }.map { it.await() }.filter { it.second }.map { it.first }
     }
 
     /** Simpan subject yang terbukti bisa diputar. */

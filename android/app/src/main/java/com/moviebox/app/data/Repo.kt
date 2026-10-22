@@ -3,6 +3,7 @@ package com.moviebox.app.data
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -52,10 +53,22 @@ object Repo {
         }
     }
 
-    suspend fun search(query: String, page: Int = 1): List<Title> = withContext(Dispatchers.IO) {
-        unwrapArray(Native.search(query, page)).objects().map(::parseTitle)
-            .filter { it.id.isNotBlank() }
+    suspend fun search(query: String, page: Int = 1): List<Title> = kotlinx.coroutines.coroutineScope {
+        // Aplikasi + web dicari bersamaan; hasil web (seperti movieboxhd.net) ditaruh di depan.
+        val web = async { runCatching { MovieBoxWeb.search(query, page) }.getOrDefault(emptyList()) }
+        val native = async(Dispatchers.IO) {
+            runCatching {
+                unwrapArray(Native.search(query, page)).objects().map(::parseTitle).filter { it.id.isNotBlank() }
+            }
+        }
+        val w = web.await()
+        val n = native.await()
+        if (w.isEmpty() && n.isFailure) throw n.exceptionOrNull()!!
+        val words = query.lowercase().split(Regex("\\s+")).filter { it.length > 1 }
+        // Judul yang memuat semua kata kunci diurutkan paling atas.
+        (w + n.getOrDefault(emptyList()))
             .distinctBy { it.id }
+            .sortedByDescending { t -> words.count { t.title.lowercase().contains(it) } }
     }
 
     private val detailsCache = java.util.concurrent.ConcurrentHashMap<String, Details>()

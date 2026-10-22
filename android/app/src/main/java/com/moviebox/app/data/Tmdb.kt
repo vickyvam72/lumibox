@@ -82,28 +82,54 @@ object Tmdb {
     suspend fun latest(series: Boolean, local: Boolean): List<Title> = withContext(Dispatchers.IO) {
         if (!enabled) return@withContext emptyList()
         val today = java.time.LocalDate.now()
-        val from = today.minusMonths(if (local) 12 else 6)
+        val from = today.minusMonths(if (local) 18 else 8)
         val type = if (series) "tv" else "movie"
         val dateKey = if (series) "first_air_date" else "primary_release_date"
         val params = mutableMapOf(
             "language" to "id-ID",
             "sort_by" to "popularity.desc",
             "$dateKey.gte" to from.toString(),
-            "$dateKey.lte" to today.toString(),
             "include_adult" to "false",
         )
+        applyQuality(params, series, local)
+        val out = mutableListOf<Title>()
+        for (page in 1..3) {
+            params["page"] = page.toString()
+            out += parseResults(runCatching { get("/discover/$type", params) }.getOrNull(), series)
+        }
+        out.distinctBy { it.key }.filterNot(::isJunk)
+    }
+
+    /**
+     * Hanya judul yang sudah bisa ditonton di rumah:
+     * film = sudah rilis digital/fisik/TV (bukan yang masih di bioskop), minimal 60 menit;
+     * lokal = produksi & bahasa asli Indonesia (drama dubbing / sulih suara tidak ikut).
+     */
+    private fun applyQuality(params: MutableMap<String, String>, series: Boolean, local: Boolean) {
+        val today = java.time.LocalDate.now().toString()
+        if (series) {
+            params["first_air_date.lte"] = today
+        } else {
+            params["with_release_type"] = "4|5|6"
+            params["release_date.lte"] = today
+            params["with_runtime.gte"] = "60"
+        }
         if (local) {
             params["with_origin_country"] = "ID"
+            params["with_original_language"] = "id"
+            params["vote_count.gte"] = "1"
         } else {
             params["without_origin_country"] = "ID"
             params["vote_count.gte"] = if (series) "20" else "50"
         }
-        val out = mutableListOf<Title>()
-        for (page in 1..2) {
-            params["page"] = page.toString()
-            out += parseResults(runCatching { get("/discover/$type", params) }.getOrNull(), series)
-        }
-        out.distinctBy { it.key }
+    }
+
+    private val junkWords = listOf("sulih suara", "dramabox", "dubbing", "(dub", "[dub", "reelshort", "shortmax", "goodshort")
+
+    /** Drama pendek dubbing / judul tidak jelas. */
+    fun isJunk(t: Title): Boolean {
+        val n = t.title.lowercase()
+        return junkWords.any { n.contains(it) } || (t.description ?: "").lowercase().let { d -> junkWords.any { d.contains(it) } }
     }
 
     private fun parseResults(json: JSONObject?, series: Boolean?): List<Title> =
@@ -141,6 +167,10 @@ object Tmdb {
             "page" to page.toString(),
         )
         if (year != null) params[if (series) "first_air_date_year" else "primary_release_year"] = year.toString()
+        if (!series) {
+            params["with_release_type"] = "4|5|6"
+            params["release_date.lte"] = java.time.LocalDate.now().toString()
+        }
         if (label == "Anime") params["with_original_language"] = "ja"
         if (label == "Animasi") params["without_original_language"] = "ja"
         parseResults(runCatching { get("/discover/${if (series) "tv" else "movie"}", params) }.getOrNull(), series)
@@ -158,13 +188,8 @@ object Tmdb {
             "page" to page.toString(),
         )
         if (year != null) params[if (series) "first_air_date_year" else "primary_release_year"] = year.toString()
-        if (local) {
-            params["with_origin_country"] = "ID"
-        } else {
-            params["without_origin_country"] = "ID"
-            params["vote_count.gte"] = if (series) "20" else "50"
-        }
-        parseResults(runCatching { get("/discover/${if (series) "tv" else "movie"}", params) }.getOrNull(), series)
+        applyQuality(params, series, local)
+        parseResults(runCatching { get("/discover/${if (series) "tv" else "movie"}", params) }.getOrNull(), series).filterNot(::isJunk)
     }
 
     /** Rekomendasi TMDB dari satu judul yang disukai. */

@@ -132,7 +132,7 @@ class HomeViewModel : ViewModel() {
             catalogs = emptyList()
             catalogsLoading = false
             mainRows().forEach { r ->
-                Library.loadTitles(r.key).takeIf { it.isNotEmpty() }?.let { rows[r.key] = it }
+                Library.loadTitles("v2_${r.key}").takeIf { it.isNotEmpty() }?.let { rows[r.key] = it }
                 loadRow(r, force = rows.containsKey(r.key))
             }
             return
@@ -201,7 +201,10 @@ class HomeViewModel : ViewModel() {
             val fromRows = rows.values.flatten().filter { Library.affinity(it) > 0 }
             val likedKeys = liked.map { it.key }.toSet()
             val likedNames = liked.map { it.title.lowercase() }.toSet()
-            recommended = (fromTmdb + Library.personalize(fromRows) + fromGenres)
+            val avail = com.moviebox.app.data.Resolver.filterAvailable(
+                (fromTmdb + fromGenres).filterNot(com.moviebox.app.data.Tmdb::isJunk).distinctBy { it.key }.take(40),
+            )
+            recommended = (avail.take(20) + Library.personalize(fromRows) + avail.drop(20))
                 .filter { it.key !in likedKeys && it.title.lowercase() !in likedNames && Library.taste(it) == 0 }
                 .distinctBy { it.key }
                 .distinctBy { it.title.lowercase() }
@@ -217,10 +220,16 @@ class HomeViewModel : ViewModel() {
             if (items.isEmpty()) {
                 // Cadangan yang tetap relevan: TMDB rilis terbaru (butuh kunci TMDB).
                 items = runCatching { com.moviebox.app.data.Tmdb.latest(r.isSeries, r.local) }.getOrDefault(emptyList())
+                if (items.isNotEmpty()) {
+                    // Hanya yang sudah ada link tontonnya di MovieBox.
+                    val known = items.filter(com.moviebox.app.data.Resolver::knownAvailable)
+                    if (known.size >= 6 && rows[r.key].isNullOrEmpty()) rows[r.key] = known
+                    items = com.moviebox.app.data.Resolver.filterAvailable(items)
+                }
             }
             if (items.isNotEmpty()) {
                 rows[r.key] = items
-                if (tmdbMode) Library.saveTitles(r.key, items)
+                if (tmdbMode) Library.saveTitles("v2_${r.key}", items)
             } else if (rows[r.key].isNullOrEmpty()) failedRows[r.key] = true
             loadingRows.remove(r.key)
         }
