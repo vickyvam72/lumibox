@@ -121,7 +121,7 @@ object Library {
 
     /** Urutkan ulang daftar sesuai selera (stabil: urutan "terbaru" tetap untuk yang setara). */
     fun personalize(items: List<Title>): List<Title> =
-        items.filterNot(::isDisliked).sortedByDescending(::affinity)
+        items.filter(ContentFilter::allows).filterNot(::isDisliked).sortedByDescending(::affinity)
 
     fun removeHistory(id: String) {
         if (history.removeAll { it.id == id }) persistHistory()

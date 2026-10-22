@@ -68,7 +68,6 @@ object Repo {
         val root = JSONObject(Native.webSearch(query, page))
         lastSearchDebug = root.str("debug")
         root.optJSONArray("data").objects()
-            .filter { it.str("media_type") != "other" } // drama pendek / klip tidak ditampilkan
             .map(::parseTitle).filter { it.id.isNotBlank() }
     }
 
@@ -178,6 +177,9 @@ object Repo {
         isSeries = o.str("media_type") == "series",
         year = o.str("year"),
         poster = o.str("poster_url"),
+        genres = o.str("genre")?.let { Genres.normalize(listOf(it)) }.orEmpty(),
+        country = o.str("country"),
+        shortDrama = o.str("media_type") == "other",
     )
 }
 

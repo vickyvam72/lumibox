@@ -383,7 +383,7 @@ fun HomeScreen(
             }
 
             // Rekomendasi untukmu: di atas Film Lokal, setelah menyukai beberapa judul
-            val reco = vm.recommended.filter {
+            val reco = com.moviebox.app.data.ContentFilter.apply(vm.recommended).filter {
                 when (vm.filter) {
                     HomeFilter.ALL -> true
                     HomeFilter.SERIES -> it.isSeries

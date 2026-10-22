@@ -183,7 +183,7 @@ fun SearchScreen(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.fillMaxSize(),
                     ) {
-                        items(results.distinctBy { it.key }, key = { it.key }) { item ->
+                        items(com.moviebox.app.data.ContentFilter.apply(results).distinctBy { it.key }, key = { it.key }) { item ->
                             Poster(
                                 item = item,
                                 onClick = { onOpen(item) },
@@ -218,7 +218,7 @@ private fun SearchDebug(text: String) {
 private fun SuggestionList(titles: List<Title>, onOpen: (Title) -> Unit, onDetails: (Title) -> Unit) {
     LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
         item { SectionTitle("Rekomendasi untukmu") }
-        items(titles.distinctBy { it.key }.take(30), key = { it.key }) { item ->
+        items(com.moviebox.app.data.ContentFilter.apply(titles).distinctBy { it.key }.take(30), key = { it.key }) { item ->
             Row(
                 Modifier
                     .fillMaxWidth()

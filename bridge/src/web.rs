@@ -375,6 +375,8 @@ impl WebEngine {
                 "title": title,
                 "media_type": match kind { 1 => "movie", 2 => "series", _ => "other" },
                 "subject_type": kind,
+                "genre": sub.get("genre").and_then(|v| v.as_str()).unwrap_or(""),
+                "country": sub.get("countryName").and_then(|v| v.as_str()).unwrap_or(""),
                 "year": if year.is_empty() { Value::Null } else { json!(year) },
                 "poster_url": if poster.is_empty() { Value::Null } else { json!(poster) },
                 "detail_path": path,

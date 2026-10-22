@@ -187,7 +187,7 @@ fun DetailScreen(
                                 watched != null -> "Lanjutkan"
                                 else -> "Putar"
                             }
-                            if (d.isShortDrama) {
+                            if (d.isShortDrama && !com.moviebox.app.data.ContentFilter.showShortDrama) {
                                 Text(
                                     "Ini drama pendek MovieBox, bukan film/serial biasa. Link videonya dari MovieBox " +
                                         "sering berisi film lain, jadi untuk sementara tidak diputar.",

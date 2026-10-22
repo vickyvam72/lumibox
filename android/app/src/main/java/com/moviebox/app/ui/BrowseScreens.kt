@@ -203,7 +203,7 @@ class CategoryViewModel(private val row: HomeRow) : ViewModel() {
                 } else {
                     fresh += tmdbPages(y)
                 }
-                val add = fresh.filter { known.add(it.key) && !Library.isDisliked(it) }
+                val add = fresh.filter { known.add(it.key) && !Library.isDisliked(it) && com.moviebox.app.data.ContentFilter.allows(it) }
                 items = items + add
                 if (add.isEmpty()) endReached = true
                 if (items.isEmpty() && endReached) {

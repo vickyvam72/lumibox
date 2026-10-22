@@ -301,6 +301,65 @@ private fun DownloadRow(d: DownloadItem, tick: Int, onPlayOffline: (DownloadItem
 /** Setting: kunci API. */
 @Composable
 fun SettingsScreen(onBack: () -> Unit) {
+    SettingsBody(onBack)
+}
+
+@Composable
+private fun ContentFilterCard() {
+    Column(
+        Modifier
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth()
+            .background(Surface2, androidx.compose.foundation.shape.RoundedCornerShape(10.dp))
+            .padding(16.dp),
+    ) {
+        Text("Konten", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Kalau dimatikan, judul ini tidak muncul di mana pun: beranda, kategori, rekomendasi, dan pencarian.",
+            color = TextDim,
+            fontSize = 13.sp,
+        )
+        Spacer(Modifier.height(8.dp))
+        FilterSwitch(
+            title = "Drama pendek (DramaBox dkk.)",
+            subtitle = "Drama pendek / dubbing seperti DramaBox, ReelShort, ShortMax. Videonya kadang tidak sesuai judul.",
+            checked = com.moviebox.app.data.ContentFilter.showShortDrama,
+            onChange = com.moviebox.app.data.ContentFilter::setShortDrama,
+        )
+        FilterSwitch(
+            title = "Film & serial India / Bollywood",
+            subtitle = "Termasuk film berbahasa Hindi, Tamil, Telugu, Malayalam, dan lainnya.",
+            checked = com.moviebox.app.data.ContentFilter.showIndian,
+            onChange = com.moviebox.app.data.ContentFilter::setIndian,
+        )
+    }
+}
+
+@Composable
+private fun FilterSwitch(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable { onChange(!checked) }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = Color.White, fontSize = 15.sp)
+            Text(subtitle, color = TextDim, fontSize = 12.sp, lineHeight = 15.sp)
+        }
+        Spacer(Modifier.width(8.dp))
+        androidx.compose.material3.Switch(
+            checked = checked,
+            onCheckedChange = onChange,
+            colors = androidx.compose.material3.SwitchDefaults.colors(checkedTrackColor = Accent),
+        )
+    }
+}
+
+@Composable
+private fun SettingsBody(onBack: () -> Unit) {
     Column(
         Modifier
             .fillMaxSize()
@@ -312,12 +371,13 @@ fun SettingsScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             item { TmdbCard() }
+            item { ContentFilterCard() }
             item {
                 Column(Modifier.padding(horizontal = 20.dp)) {
                     Text("Tentang", color = Color.White, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Lumi Box · katalog dari addon EasyRatings, info film dari TMDB, video dari MovieBox.",
+                        "Lumi Box · info film dari TMDB, video dari MovieBox.",
                         color = TextDim,
                         fontSize = 13.sp,
                     )

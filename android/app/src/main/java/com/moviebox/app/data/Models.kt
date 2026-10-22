@@ -18,6 +18,11 @@ data class Title(
     val genres: List<String> = emptyList(),
     /** ID TMDB (dari daftar TMDB discover). */
     val tmdbId: String? = null,
+    /** Bahasa asli (kode ISO, mis. "hi") dan negara asal — untuk saringan konten. */
+    val lang: String? = null,
+    val country: String? = null,
+    /** Drama pendek MovieBox (bukan film/serial biasa). */
+    val shortDrama: Boolean = false,
 ) {
     /** Kunci unik untuk daftar/navigasi. */
     val key: String

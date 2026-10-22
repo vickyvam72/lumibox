@@ -20,6 +20,7 @@ class App : Application() {
         Addon.init(this)
         Resolver.init(this)
         Tmdb.init(this)
+        com.moviebox.app.data.ContentFilter.init(this)
         com.moviebox.app.data.Translator.init(this)
         com.moviebox.app.data.Downloads.init(this)
         // Siapkan token/sesi MovieBox di latar supaya putar pertama lebih cepat.

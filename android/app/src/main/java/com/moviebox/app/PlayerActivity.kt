@@ -287,7 +287,7 @@ class PlayerActivity : ComponentActivity() {
                 found = fetchStreams(subjectId)
                 usedId = subjectId
             }
-            if (details?.isShortDrama == true) {
+            if (details?.isShortDrama == true && !com.moviebox.app.data.ContentFilter.showShortDrama) {
                 showError("Ini drama pendek MovieBox. Link videonya sering berisi film lain, jadi tidak diputar.")
                 return@launch
             }

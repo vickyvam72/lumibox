@@ -97,7 +97,7 @@ object Tmdb {
             params["page"] = page.toString()
             out += parseResults(runCatching { get("/discover/$type", params) }.getOrNull(), series)
         }
-        out.distinctBy { it.key }.filterNot(::isJunk)
+        out.distinctBy { it.key }
     }
 
     /**
@@ -124,13 +124,9 @@ object Tmdb {
         }
     }
 
-    private val junkWords = listOf("sulih suara", "dramabox", "dubbing", "(dub", "[dub", "reelshort", "shortmax", "goodshort")
 
-    /** Drama pendek dubbing / judul tidak jelas. */
-    fun isJunk(t: Title): Boolean {
-        val n = t.title.lowercase()
-        return junkWords.any { n.contains(it) } || (t.description ?: "").lowercase().let { d -> junkWords.any { d.contains(it) } }
-    }
+    /** Disembunyikan sesuai Setting (drama pendek / India). */
+    fun isJunk(t: Title): Boolean = !ContentFilter.allows(t)
 
     private fun parseResults(json: JSONObject?, series: Boolean?): List<Title> =
         json?.optJSONArray("results").objects().mapNotNull { r ->
@@ -151,6 +147,8 @@ object Tmdb {
                 description = r.str("overview"),
                 genres = Genres.normalize(genreIds),
                 tmdbId = r.opt("id")?.toString(),
+                lang = r.str("original_language"),
+                country = r.optJSONArray("origin_country")?.optString(0)?.takeIf { it.isNotBlank() },
             )
         }
 
@@ -189,7 +187,7 @@ object Tmdb {
         )
         if (year != null) params[if (series) "first_air_date_year" else "primary_release_year"] = year.toString()
         applyQuality(params, series, local)
-        parseResults(runCatching { get("/discover/${if (series) "tv" else "movie"}", params) }.getOrNull(), series).filterNot(::isJunk)
+        parseResults(runCatching { get("/discover/${if (series) "tv" else "movie"}", params) }.getOrNull(), series)
     }
 
     /** Rekomendasi TMDB dari satu judul yang disukai. */
