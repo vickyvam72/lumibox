@@ -213,7 +213,7 @@ private fun LumiApp() {
                     arguments = listOf(navArgument("key") { type = NavType.StringType }),
                 ) { entry ->
                     val key = Uri.decode(entry.arguments?.getString("key").orEmpty())
-                    val row = homeVm.mainRows().firstOrNull { it.key == key }
+                    val row = homeVm.allRows().firstOrNull { it.key == key }
                     if (row == null) {
                         androidx.compose.runtime.LaunchedEffect(Unit) { nav.popBackStack() }
                     } else {

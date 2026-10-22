@@ -88,7 +88,7 @@ object Tmdb {
         val type = if (series) "tv" else "movie"
         val dateKey = if (series) "first_air_date" else "primary_release_date"
         val params = mutableMapOf(
-            "language" to "id-ID",
+            "language" to "en-US",
             "sort_by" to "popularity.desc",
             "$dateKey.gte" to from.toString(),
             "include_adult" to "false",
@@ -134,7 +134,10 @@ object Tmdb {
         json?.optJSONArray("results").objects().mapNotNull { r ->
             val isSeries = series ?: (r.str("media_type") == "tv")
             val poster = r.str("poster_path") ?: return@mapNotNull null
-            val name = r.str("title") ?: r.str("name") ?: return@mapNotNull null
+            val lang = r.str("original_language")
+            // lokal → judul asli Indonesia; selain itu judul dari permintaan (bahasa Inggris)
+            val name = (if (lang == "id") r.str("original_title") ?: r.str("original_name") else null)
+                ?: r.str("title") ?: r.str("name") ?: return@mapNotNull null
             val date = r.str("release_date") ?: r.str("first_air_date")
             val vote = r.optDouble("vote_average", 0.0)
             val genreIds = r.optJSONArray("genre_ids")?.let { a -> (0 until a.length()).map { a.opt(it).toString() } }.orEmpty()
@@ -159,7 +162,7 @@ object Tmdb {
         if (!enabled) return@withContext emptyList()
         val ids = Genres.tmdbFor(label, series) ?: return@withContext emptyList()
         val params = mutableMapOf(
-            "language" to "id-ID",
+            "language" to "en-US",
             "sort_by" to "popularity.desc",
             "include_adult" to "false",
             "vote_count.gte" to if (series) "30" else "80",
@@ -185,12 +188,39 @@ object Tmdb {
         parseResults(runCatching { get("/discover/${if (series) "tv" else "movie"}", params) }.getOrNull(), series)
     }
 
+    /** Top 10: paling populer di antara yang rilis 12 bulan terakhir (lokal 24 bulan) dan sudah bisa ditonton. */
+    suspend fun top(series: Boolean, local: Boolean): List<Title> = withContext(Dispatchers.IO) {
+        if (!enabled) return@withContext emptyList()
+        val today = java.time.LocalDate.now()
+        val dateKey = if (series) "first_air_date" else "primary_release_date"
+        val params = mutableMapOf(
+            "language" to "en-US",
+            "sort_by" to "popularity.desc",
+            "$dateKey.gte" to today.minusMonths(if (local) 24 else 12).toString(),
+            "include_adult" to "false",
+        )
+        applyQuality(params, series, local)
+        val out = mutableListOf<Title>()
+        for (page in 1..2) {
+            params["page"] = page.toString()
+            out += parseResults(runCatching { get("/discover/${if (series) "tv" else "movie"}", params) }.getOrNull(), series)
+        }
+        out.distinctBy { it.key }
+    }
+
+    /** Rilis terbaru: urut tanggal rilis (paling baru dulu), hanya yang sudah rilis digital. */
+    suspend fun newest(series: Boolean, local: Boolean): List<Title> {
+        val out = mutableListOf<Title>()
+        for (page in 1..2) out += discover(series, local, null, page)
+        return out.distinctBy { it.key }
+    }
+
     /** Daftar lengkap Lokal/Global (terbaru dulu), opsional per tahun — untuk halaman "Lainnya". */
     suspend fun discover(series: Boolean, local: Boolean, year: Int?, page: Int): List<Title> = withContext(Dispatchers.IO) {
         if (!enabled) return@withContext emptyList()
         val dateKey = if (series) "first_air_date" else "primary_release_date"
         val params = mutableMapOf(
-            "language" to "id-ID",
+            "language" to "en-US",
             "sort_by" to if (year != null) "popularity.desc" else "$dateKey.desc",
             "include_adult" to "false",
             "$dateKey.lte" to java.time.LocalDate.now().toString(),
@@ -207,7 +237,7 @@ object Tmdb {
         val type = if (t.isSeries) "tv" else "movie"
         runCatching {
             val id = findId(t, type) ?: return@runCatching emptyList()
-            parseResults(get("/$type/$id/recommendations", mapOf("language" to "id-ID")), t.isSeries)
+            parseResults(get("/$type/$id/recommendations", mapOf("language" to "en-US")), t.isSeries)
         }.getOrDefault(emptyList())
     }
 
@@ -228,8 +258,10 @@ object Tmdb {
 
         // Poster: id → en → tanpa teks (null) → bahasa asli
         val posters = detail.optJSONObject("images")?.optJSONArray("posters").objects()
+        val local = originalLang == "id"
         fun pickPoster(): String? {
-            for (lang in listOf("id", "en", null, originalLang)) {
+            // lokal: poster Indonesia; selain itu: poster Inggris
+            for (lang in if (local) listOf("id", null, originalLang, "en") else listOf("en", null, originalLang, "id")) {
                 val p = posters.firstOrNull { it.str("iso_639_1") == lang }?.str("file_path")
                 if (p != null) return p
             }
@@ -256,13 +288,23 @@ object Tmdb {
             ?.takeIf { it.isNotBlank() }
         val originalTitle = detail.str("original_title") ?: detail.str("original_name")
         val idTitle = translatedTitle("id")
-        val title = idTitle ?: translatedTitle("en") ?: originalTitle ?: detail.str("title") ?: detail.str("name")
+        // Judul: film/serial lokal → bahasa Indonesia; selain itu → bahasa Inggris
+        val title = if (local) {
+            originalTitle ?: idTitle ?: detail.str("title") ?: detail.str("name")
+        } else {
+            translatedTitle("en") ?: originalTitle?.takeIf { originalLang == "en" }
+                ?: runCatching { get("/$type/$id", mapOf("language" to "en-US")).let { it.str("title") ?: it.str("name") } }.getOrNull()
+                ?: originalTitle ?: detail.str("title") ?: detail.str("name")
+        }
 
         // Logo: Indonesia; kalau judul Indonesia ada tapi logonya tidak, pakai teks; lalu Inggris → asli
         val logos = detail.optJSONObject("images")?.optJSONArray("logos").objects()
         fun logoFor(lang: String?) = logos.firstOrNull { it.str("iso_639_1") == lang }?.str("file_path")
-        val logo = logoFor("id")
-            ?: if (idTitle != null) null else (logoFor("en") ?: logoFor(originalLang) ?: logoFor(null))
+        val logo = if (local) {
+            logoFor("id") ?: logoFor(null)
+        } else {
+            logoFor("en") ?: logoFor(null) ?: logoFor(originalLang)
+        }
 
         // Deskripsi Indonesia dari terjemahan kalau overview utama kosong
         if (overview.isNullOrBlank()) {

@@ -85,7 +85,11 @@ data class HomeRow(
     val isSeries: Boolean,
     val local: Boolean,
     val catalog: AddonCatalog? = null,
+    val kind: RowKind = RowKind.MAIN,
 )
+
+/** MAIN = 4 kategori utama, TOP10 = 10 terpopuler, LATEST = rilis terbaru (urut tanggal). */
+enum class RowKind { MAIN, TOP10, LATEST }
 
 const val MIN_LIKES = 3
 
@@ -127,7 +131,7 @@ class HomeViewModel : ViewModel() {
         if (tmdbMode) {
             catalogs = emptyList()
             catalogsLoading = false
-            mainRows().forEach { r ->
+            allRows().forEach { r ->
                 Library.loadTitles("v2_${r.key}").takeIf { it.isNotEmpty() }?.let { rows[r.key] = it }
                 loadRow(r, force = rows.containsKey(r.key))
             }
@@ -148,6 +152,16 @@ class HomeViewModel : ViewModel() {
             mainRows().forEach { loadRow(it, force = rows.containsKey(it.key)) }
         }
     }
+
+    /** Baris tambahan di atas Film Lokal (khusus film, dari TMDB). */
+    fun extraRows(): List<HomeRow> = if (!tmdbMode) emptyList() else listOf(
+        HomeRow("top-film-lokal", "Top 10 Film Lokal", isSeries = false, local = true, kind = RowKind.TOP10),
+        HomeRow("top-film-global", "Top 10 Film Global", isSeries = false, local = false, kind = RowKind.TOP10),
+        HomeRow("new-film-lokal", "Film Lokal Rilis Terbaru", isSeries = false, local = true, kind = RowKind.LATEST),
+        HomeRow("new-film-global", "Film Global Rilis Terbaru", isSeries = false, local = false, kind = RowKind.LATEST),
+    )
+
+    fun allRows(): List<HomeRow> = extraRows() + mainRows()
 
     /** 4 kategori beranda: Film Lokal, Serial Lokal, Film Global, Serial Global (rilis terbaru). */
     fun mainRows(): List<HomeRow> {
@@ -261,7 +275,13 @@ class HomeViewModel : ViewModel() {
             var items = if (r.catalog != null) runCatching { Addon.catalog(r.catalog) }.getOrDefault(emptyList()) else emptyList()
             if (items.isEmpty()) {
                 // Cadangan yang tetap relevan: TMDB rilis terbaru (butuh kunci TMDB).
-                items = runCatching { com.moviebox.app.data.Tmdb.latest(r.isSeries, r.local) }.getOrDefault(emptyList())
+                items = runCatching {
+                    when (r.kind) {
+                        RowKind.MAIN -> com.moviebox.app.data.Tmdb.latest(r.isSeries, r.local)
+                        RowKind.TOP10 -> com.moviebox.app.data.Tmdb.top(r.isSeries, r.local)
+                        RowKind.LATEST -> com.moviebox.app.data.Tmdb.newest(r.isSeries, r.local)
+                    }
+                }.getOrDefault(emptyList())
                 // Langsung tampil; yang sudah pasti tidak ada di MovieBox dibuang,
                 // sisanya dicek di latar dan dihapus dari baris kalau ternyata tidak ada.
                 items = com.moviebox.app.data.Resolver.notMissing(items)
@@ -431,6 +451,8 @@ fun HomeScreen(
             }
 
             // Hanya 4 kategori: Film Lokal, Serial Lokal, Film Global, Serial Global
+            // Top 10 & rilis terbaru (film), lalu 4 kategori utama
+            vm.extraRows().filter(vm::keepRow).forEach { r -> rowItem(r, vm, onOpen, onDetails, onRow) }
             main.forEach { r -> rowItem(r, vm, onOpen, onDetails, onRow) }
         }
     }
@@ -457,7 +479,21 @@ private fun androidx.compose.foundation.lazy.LazyListScope.rowItem(
         LaunchedEffect(r.key, vm.catalogsLoading) { if (!vm.catalogsLoading) vm.loadRow(r) }
         val items = vm.rows[r.key]
         when {
-            items != null && items.isNotEmpty() -> TitleRow(r.title, Library.personalize(items), onOpen, onDetails, onMore = { onRow(r) })
+            items != null && items.isNotEmpty() -> when (r.kind) {
+                // Top 10: urutan popularitas tetap, cukup 10 judul
+                RowKind.TOP10 -> TitleRow(
+                    r.title,
+                    com.moviebox.app.data.ContentFilter.apply(items).filterNot(Library::isDisliked).take(10),
+                    onOpen, onDetails, top10 = true,
+                )
+                // Rilis terbaru: urut tanggal rilis, bisa "Lainnya"
+                RowKind.LATEST -> TitleRow(
+                    r.title,
+                    com.moviebox.app.data.ContentFilter.apply(items).filterNot(Library::isDisliked),
+                    onOpen, onDetails, onMore = { onRow(r) },
+                )
+                RowKind.MAIN -> TitleRow(r.title, Library.personalize(items), onOpen, onDetails, onMore = { onRow(r) })
+            }
             vm.failedRows[r.key] == true -> Column {
                 SectionTitle(r.title)
                 Text(
