@@ -26,7 +26,20 @@ object Resolver {
     }
 
     suspend fun subjectId(t: Title): String {
-        cached(t)?.let { return it }
+        val known = cached(t)
+        if (known != null) {
+            if (!t.isSeries) return known
+            // Serial: pastikan entri ini memang punya episode (ada entri kembar yang kosong).
+            val d = runCatching { Repo.details(known) }.getOrNull()
+            if (d == null || d.seasons.any { it.episodes.isNotEmpty() }) return known
+            val name = t.title.ifBlank { d.title }
+            val better = if (name.isNotBlank()) findMatch(name, t.copy(title = name), exclude = setOf(known)) else null
+            if (better != null) {
+                cacheKey(t)?.let { prefs.edit().putString(it, better).apply() }
+                return better
+            }
+            return known
+        }
         val names = linkedSetOf(t.title)
         var match = findMatch(t.title, t)
         if (match == null && t.imdbId != null && t.imdbId.startsWith("tt")) {
@@ -47,15 +60,43 @@ object Resolver {
         return match
     }
 
-    private suspend fun findMatch(name: String, t: Title): String? {
+    private suspend fun findMatch(name: String, t: Title, exclude: Set<String> = emptySet()): String? =
+        candidates(name, t, exclude).firstOrNull()
+
+    /** Kandidat subject yang cocok, yang paling cocok dulu; serial kosong (0 episode) ditaruh paling akhir. */
+    private suspend fun candidates(name: String, t: Title, exclude: Set<String>): List<String> {
         val results = runCatching { Repo.search(name) }.getOrDefault(emptyList())
         val wanted = normalize(name)
-        val best = results
-            .filter { it.isSeries == t.isSeries }
+        val ranked = results
+            .filter { it.isSeries == t.isSeries && it.id !in exclude }
             .map { it to score(wanted, t.year, it) }
             .filter { it.second >= 3 }
-            .maxByOrNull { it.second }
-        return best?.first?.id
+            .sortedByDescending { it.second }
+            .map { it.first.id }
+        if (!t.isSeries || ranked.size <= 1) return ranked
+        // MovieBox kadang punya entri serial kembar yang kosong → utamakan yang punya episode.
+        val withEpisodes = ranked.take(4).filter { id ->
+            runCatching { Repo.details(id) }.getOrNull()?.seasons?.any { it.episodes.isNotEmpty() } == true
+        }
+        return (withEpisodes + ranked).distinct()
+    }
+
+    /** Subject lain dengan judul sama (dipakai kalau subject pertama tidak punya video). */
+    suspend fun alternatives(t: Title, exclude: Set<String>): List<String> {
+        val out = linkedSetOf<String>()
+        val names = linkedSetOf<String>()
+        if (t.title.isNotBlank()) names += t.title
+        names += Tmdb.altTitles(t).take(3)
+        for (n in names) {
+            out += candidates(n, t, exclude + out)
+            if (out.size >= 4) break
+        }
+        return out.toList().take(4)
+    }
+
+    /** Simpan subject yang terbukti bisa diputar. */
+    fun remember(t: Title, subjectId: String) {
+        cacheKey(t)?.let { prefs.edit().putString(it, subjectId).apply() }
     }
 
     private fun score(wanted: String, year: String?, candidate: Title): Int {

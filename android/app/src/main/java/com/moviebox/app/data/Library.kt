@@ -168,6 +168,10 @@ object Library {
         }
     }.getOrDefault(emptyList())
 
+    /** Simpan/baca daftar judul bebas (dipakai cache baris beranda). */
+    fun saveTitles(key: String, list: List<Title>) = persistList("cache_$key", list)
+    fun loadTitles(key: String): List<Title> = readList("cache_$key")
+
     private fun persistList(key: String = "my_list", list: List<Title> = myList) {
         val arr = JSONArray()
         list.forEach { t ->

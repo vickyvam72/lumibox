@@ -116,7 +116,27 @@ class HomeViewModel : ViewModel() {
         loadCatalogs()
     }
 
+    /** Pakai TMDB saja kalau kuncinya ada (poster, judul, skor konsisten & cepat). */
+    private val tmdbMode: Boolean get() = com.moviebox.app.data.Tmdb.enabled
+
+    private var loadedMode: Boolean? = null
+
+    /** Kunci TMDB baru diisi/dihapus → muat ulang beranda dengan sumber yang sesuai. */
+    fun checkMode() {
+        if (loadedMode != null && loadedMode != tmdbMode) refresh()
+    }
+
     private fun loadCatalogs() {
+        loadedMode = tmdbMode
+        if (tmdbMode) {
+            catalogs = emptyList()
+            catalogsLoading = false
+            mainRows().forEach { r ->
+                Library.loadTitles(r.key).takeIf { it.isNotEmpty() }?.let { rows[r.key] = it }
+                loadRow(r, force = rows.containsKey(r.key))
+            }
+            return
+        }
         catalogsLoading = true
         // Tampilkan salinan tersimpan dulu (instan), lalu perbarui dari jaringan.
         val stored = Addon.storedCatalogs()
@@ -135,7 +155,7 @@ class HomeViewModel : ViewModel() {
 
     /** 4 kategori beranda: Film Lokal, Serial Lokal, Film Global, Serial Global (rilis terbaru). */
     fun mainRows(): List<HomeRow> {
-        fun find(series: Boolean, vararg words: String) = catalogs
+        fun find(series: Boolean, vararg words: String) = if (tmdbMode) null else catalogs
             .filter { it.isSeries == series && words.any { w -> it.name.contains(w, ignoreCase = true) } }
             // utamakan katalog "rilis/terbaru/baru"
             .sortedByDescending { c -> listOf("terbaru", "baru", "rilis", "latest", "new").count { c.name.contains(it, true) } }
@@ -198,8 +218,10 @@ class HomeViewModel : ViewModel() {
                 // Cadangan yang tetap relevan: TMDB rilis terbaru (butuh kunci TMDB).
                 items = runCatching { com.moviebox.app.data.Tmdb.latest(r.isSeries, r.local) }.getOrDefault(emptyList())
             }
-            if (items.isNotEmpty()) rows[r.key] = items
-            else if (rows[r.key].isNullOrEmpty()) failedRows[r.key] = true
+            if (items.isNotEmpty()) {
+                rows[r.key] = items
+                if (tmdbMode) Library.saveTitles(r.key, items)
+            } else if (rows[r.key].isNullOrEmpty()) failedRows[r.key] = true
             loadingRows.remove(r.key)
         }
     }
@@ -239,7 +261,7 @@ class HomeViewModel : ViewModel() {
         rows.clear()
         loadingRows.clear()
         failedRows.clear()
-        if (catalogs.isEmpty()) loadCatalogs() else mainRows().forEach { loadRow(it, force = true) }
+        if (tmdbMode || catalogs.isEmpty()) loadCatalogs() else mainRows().forEach { loadRow(it, force = true) }
         refreshing = false
     }
 
@@ -282,6 +304,7 @@ fun HomeScreen(
     onRow: (HomeRow) -> Unit = {},
 ) {
     val heroItems = vm.heroItems()
+    androidx.compose.runtime.LaunchedEffect(com.moviebox.app.data.Tmdb.enabled) { vm.checkMode() }
     val likedCount = Library.likedTitles.size
     val loadedRows = vm.rows.size
     androidx.compose.runtime.LaunchedEffect(likedCount, Library.likedTitles.firstOrNull()?.key, loadedRows) {

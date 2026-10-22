@@ -107,7 +107,7 @@ class DetailViewModel(private val key: String) : ViewModel() {
                 val subjectId = Resolver.subjectId(t)
                 val d = Repo.details(subjectId)
                 details = d
-                if (t.id.isBlank()) title = t.copy(id = subjectId)
+                if (t.id != subjectId) title = t.copy(id = subjectId)
                 if (title.title.isBlank()) title = title.copy(title = d.title, poster = d.poster, isSeries = d.isSeries)
 
                 val watched = Library.entry(subjectId)

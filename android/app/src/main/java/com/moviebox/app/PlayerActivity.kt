@@ -287,6 +287,32 @@ class PlayerActivity : ComponentActivity() {
                 usedId = subjectId
             }
             if (found.isNullOrEmpty()) {
+                // Entri MovieBox ini kosong → coba entri lain dengan judul yang sama.
+                loadingMessage = "Mencari sumber lain…"
+                val named = title.copy(title = title.title.ifBlank { details?.title ?: "" })
+                val alts = runCatching { Resolver.alternatives(named, setOf(subjectId, usedId)) }.getOrDefault(emptyList())
+                for (alt in alts) {
+                    val altDetails = runCatching { Repo.details(alt) }.getOrNull()
+                    if (title.isSeries && altDetails != null &&
+                        altDetails.seasons.none { s -> s.number == season && episode in s.episodes }
+                    ) {
+                        val (s, e) = altDetails.firstEpisode()
+                        if (altDetails.seasons.none { it.episodes.isNotEmpty() }) continue
+                        season = s
+                        episode = e
+                    }
+                    val f = fetchStreams(alt)
+                    if (!f.isNullOrEmpty()) {
+                        found = f
+                        usedId = alt
+                        subjectId = alt
+                        if (altDetails != null) details = altDetails
+                        Resolver.remember(title, alt)
+                        break
+                    }
+                }
+            }
+            if (found.isNullOrEmpty()) {
                 showError(lastErrorMessage ?: "Video tidak tersedia untuk judul ini.")
                 return@launch
             }
