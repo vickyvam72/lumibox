@@ -187,7 +187,18 @@ fun DetailScreen(
                                 watched != null -> "Lanjutkan"
                                 else -> "Putar"
                             }
-                            PlayButton(playText, onClick = { onPlay(vm.title, playSeason, playEpisode) }, modifier = Modifier.fillMaxWidth())
+                            if (d.isShortDrama) {
+                                Text(
+                                    "Ini drama pendek MovieBox, bukan film/serial biasa. Link videonya dari MovieBox " +
+                                        "sering berisi film lain, jadi untuk sementara tidak diputar.",
+                                    color = TextDim,
+                                    fontSize = 14.sp,
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                                )
+                            } else {
+                                PlayButton(playText, onClick = { onPlay(vm.title, playSeason, playEpisode) }, modifier = Modifier.fillMaxWidth())
+                            }
                             if (watched != null) {
                                 Spacer(Modifier.height(6.dp))
                                 ProgressLine(watched.progress)

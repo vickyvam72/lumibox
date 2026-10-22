@@ -61,7 +61,14 @@ data class Details(
     val country: String?,
     val durationSeconds: Long? = null,
     val ageRating: String? = null,
+    /** Jenis dari MovieBox: 1 film, 2 serial, lainnya = drama pendek / klip. */
+    val subjectType: Int? = null,
 ) {
+    /** Drama pendek MovieBox (bukan film/serial biasa): link videonya sering mengarah ke film lain. */
+    val isShortDrama: Boolean
+        get() = (subjectType != null && subjectType != 1 && subjectType != 2) ||
+            genres.any { it.equals("Modern Drama", true) || it.equals("Short Drama", true) || it.equals("Mini Drama", true) }
+
     fun asTitle() = Title(id, title, isSeries, year, poster)
 
     /** Episode setelah (season, episode), atau null kalau sudah habis. */

@@ -196,6 +196,7 @@ class PlayerActivity : ComponentActivity() {
         loadJob?.cancel()
         readyOnce = false
         errorMessage = null
+        mismatchBlocked = false
         loadingMessage = "Menyiapkan video…"
         loadJob = lifecycleScope.launch {
             // 0) File unduhan: putar offline.
@@ -286,6 +287,10 @@ class PlayerActivity : ComponentActivity() {
                 found = fetchStreams(subjectId)
                 usedId = subjectId
             }
+            if (details?.isShortDrama == true) {
+                showError("Ini drama pendek MovieBox. Link videonya sering berisi film lain, jadi tidak diputar.")
+                return@launch
+            }
             if (found.isNullOrEmpty()) {
                 // Entri MovieBox ini kosong → coba entri lain dengan judul yang sama.
                 loadingMessage = "Mencari sumber lain…"
@@ -348,6 +353,7 @@ class PlayerActivity : ComponentActivity() {
     // ---- cek durasi: cegah film yang isinya tidak sesuai judul ----
 
     private var mismatchChecked = false
+    private var mismatchBlocked by mutableStateOf(false)
     private val mismatchedStreams = mutableSetOf<String>()
 
     /** Durasi film yang diharapkan (detik), hanya untuk film (bukan episode). */
@@ -390,11 +396,15 @@ class PlayerActivity : ComponentActivity() {
             readyOnce = false
             playCurrent(0L)
         } else {
-            Toast.makeText(
-                this,
-                "Durasi video berbeda dari film aslinya. Kalau isinya salah, ganti sumber di menu Audio & Subtitle.",
-                Toast.LENGTH_LONG,
-            ).show()
+            // Semua sumber durasinya jauh beda dari judul ini → hampir pasti film lain. Hentikan.
+            player.pause()
+            val exp = expectedSeconds() ?: 0L
+            lastDebug = (lastDebug ?: "") + "\n--- durasi: judul ${exp / 60} menit, video ${actual / 60} menit"
+            mismatchBlocked = true
+            showError(
+                "Video dari MovieBox sepertinya bukan judul ini (durasi ${actual / 60} menit, " +
+                    "seharusnya sekitar ${exp / 60} menit).",
+            )
         }
     }
 
@@ -1104,7 +1114,15 @@ class PlayerActivity : ComponentActivity() {
                 Text(message, color = Color.White, fontSize = 16.sp, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(18.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    PanelButton("Coba lagi") { loadEpisode(season, episode, resume = true) }
+                    if (mismatchBlocked) {
+                        PanelButton("Tetap putar") {
+                            mismatchBlocked = false
+                            errorMessage = null
+                            player.play()
+                        }
+                    } else {
+                        PanelButton("Coba lagi") { loadEpisode(season, episode, resume = true) }
+                    }
                     if (!lastDebug.isNullOrBlank()) {
                         PanelButton("Salin info teknis") {
                             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager

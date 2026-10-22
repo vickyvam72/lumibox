@@ -212,7 +212,7 @@ pub fn details(subject_id: &str) -> String {
                     });
                     obj.insert("duration_seconds".into(), json!(seconds));
                     // Data mentah yang mungkin berguna untuk genre/rating usia.
-                    for key in ["genre", "countryName", "imdbRatingValue", "ageRating", "contentRating", "certification", "rated"] {
+                    for key in ["subjectType", "genre", "countryName", "imdbRatingValue", "ageRating", "contentRating", "certification", "rated"] {
                         if let Some(v) = subject.get(key) {
                             obj.insert(format!("raw_{key}"), v.clone());
                         }

@@ -373,7 +373,8 @@ impl WebEngine {
             out.push(json!({
                 "id": id,
                 "title": title,
-                "media_type": if kind == 2 { "series" } else { "movie" },
+                "media_type": match kind { 1 => "movie", 2 => "series", _ => "other" },
+                "subject_type": kind,
                 "year": if year.is_empty() { Value::Null } else { json!(year) },
                 "poster_url": if poster.is_empty() { Value::Null } else { json!(poster) },
                 "detail_path": path,

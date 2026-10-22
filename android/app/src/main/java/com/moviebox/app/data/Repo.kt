@@ -67,7 +67,9 @@ object Repo {
     suspend fun searchNew(query: String, page: Int = 1): List<Title> = withContext(Dispatchers.IO) {
         val root = JSONObject(Native.webSearch(query, page))
         lastSearchDebug = root.str("debug")
-        root.optJSONArray("data").objects().map(::parseTitle).filter { it.id.isNotBlank() }
+        root.optJSONArray("data").objects()
+            .filter { it.str("media_type") != "other" } // drama pendek / klip tidak ditampilkan
+            .map(::parseTitle).filter { it.id.isNotBlank() }
     }
 
     /** Urutkan: judul yang memuat semua kata kunci paling atas. */
@@ -137,6 +139,7 @@ object Repo {
                 .firstNotNullOfOrNull { d.str(it) },
             originalLanguage = d.str("original_language"),
             country = d.str("country"),
+            subjectType = d.optInt("raw_subjectType", 0).takeIf { it > 0 },
         )
     }
 
