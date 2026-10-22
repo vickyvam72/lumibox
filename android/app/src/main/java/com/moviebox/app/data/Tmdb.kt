@@ -321,12 +321,18 @@ object Tmdb {
         val posters = detail.optJSONObject("images")?.optJSONArray("posters").objects()
         val local = originalLang == "id"
         fun pickPoster(): String? {
-            // lokal: poster Indonesia; selain itu: poster Inggris
-            for (lang in if (local) listOf("id", null, originalLang, "en") else listOf("en", null, originalLang, "id")) {
-                val p = posters.firstOrNull { it.str("iso_639_1") == lang }?.str("file_path")
-                if (p != null) return p
-            }
-            return detail.str("poster_path")
+            // lokal: poster Indonesia; selain itu: poster Inggris.
+            // Pilih poster dengan VOTING terbaik: poster yang salah unggah (mis. poster film lain)
+            // biasanya belum punya suara sama sekali, jadi tidak ikut terpilih.
+            val order = if (local) listOf("id", null, originalLang, "en") else listOf("en", null, originalLang, "id")
+            val candidates = posters.filter { it.str("iso_639_1") in order }
+            val best = candidates.sortedWith(
+                compareByDescending<JSONObject> { it.optInt("vote_count", 0) > 0 }
+                    .thenBy { order.indexOf(it.str("iso_639_1")).coerceAtMost(1) } // utamakan bahasa pilihan / tanpa teks
+                    .thenByDescending { it.optDouble("vote_average", 0.0) }
+                    .thenByDescending { it.optInt("vote_count", 0) },
+            ).firstOrNull()?.str("file_path")
+            return best ?: detail.str("poster_path")
         }
         val backdrops = detail.optJSONObject("images")?.optJSONArray("backdrops").objects()
         val backdrop = (
