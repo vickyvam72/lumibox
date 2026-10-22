@@ -17,7 +17,9 @@ object Resolver {
     private lateinit var prefs: SharedPreferences
 
     fun init(context: Context) {
-        prefs = context.getSharedPreferences("lumibox_resolve", Context.MODE_PRIVATE)
+        // v2: pencocokan lebih ketat — hasil lama (yang bisa salah judul) dibuang.
+        context.deleteSharedPreferences("lumibox_resolve")
+        prefs = context.getSharedPreferences("lumibox_resolve2", Context.MODE_PRIVATE)
     }
 
     private fun cacheKey(t: Title): String? = t.imdbId ?: t.tmdbId?.let { "tmdb:${if (t.isSeries) "tv" else "movie"}:$it" }
@@ -74,7 +76,7 @@ object Resolver {
             .filter { it.id !in exclude }
             // jenis (film/serial) kadang salah label di MovieBox → beda jenis tetap boleh, tapi nilainya dikurangi
             .map { it to score(wanted, t.year, it) - if (it.isSeries == t.isSeries) 0 else 1 }
-            .filter { it.second >= 3 }
+            .filter { it.second >= 4 }
             .sortedByDescending { it.second }
             .map { it.first.id }
         if (!t.isSeries || ranked.size <= 1) return ranked
@@ -149,10 +151,15 @@ object Resolver {
 
     private fun score(wanted: String, year: String?, candidate: Title): Int {
         val title = normalize(candidate.title)
+        // Ketat: harus sama persis, atau salah satu awalan yang lain dan panjangnya mirip
+        // (mis. "Sore" vs "Sore: Istri dari Masa Depan"). Sekadar memuat satu kata tidak cukup.
+        val shorter = minOf(title.length, wanted.length).toDouble()
+        val longer = maxOf(title.length, wanted.length).coerceAtLeast(1).toDouble()
+        val prefix = title.startsWith(wanted) || wanted.startsWith(title)
+        val nextChar = if (title.length > wanted.length) title.getOrNull(wanted.length) else wanted.getOrNull(title.length)
         var s = when {
             title == wanted -> 4
-            title.startsWith(wanted) || wanted.startsWith(title) -> 2
-            title.contains(wanted) || wanted.contains(title) -> 1
+            prefix && shorter >= 4 && (nextChar == ' ' || shorter / longer >= 0.6) -> 2
             else -> 0
         }
         if (s == 0) return 0

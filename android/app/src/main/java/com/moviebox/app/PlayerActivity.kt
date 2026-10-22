@@ -291,8 +291,15 @@ class PlayerActivity : ComponentActivity() {
                 loadingMessage = "Mencari sumber lain…"
                 val named = title.copy(title = title.title.ifBlank { details?.title ?: "" })
                 val alts = runCatching { Resolver.alternatives(named, setOf(subjectId, usedId)) }.getOrDefault(emptyList())
+                val ownDuration = details?.durationSeconds ?: 0L
                 for (alt in alts) {
                     val altDetails = runCatching { Repo.details(alt) }.getOrNull()
+                    // Film lain berjudul mirip tapi durasinya jauh berbeda → bukan film yang sama.
+                    val altDuration = altDetails?.durationSeconds ?: 0L
+                    if (!title.isSeries && ownDuration > 0 && altDuration > 0 &&
+                        kotlin.math.abs(ownDuration - altDuration) > maxOf(600L, ownDuration / 4)
+                    ) continue
+                    if (altDetails != null && altDetails.isSeries != title.isSeries) continue
                     if (title.isSeries && altDetails != null &&
                         altDetails.seasons.none { s -> s.number == season && episode in s.episodes }
                     ) {

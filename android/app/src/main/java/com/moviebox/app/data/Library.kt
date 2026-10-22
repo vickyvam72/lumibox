@@ -107,6 +107,12 @@ object Library {
 
     fun isDisliked(t: Title): Boolean = taste(t) < 0
 
+    /** Sudah pernah menekan Suka / Bukan untuk Saya? */
+    fun hasTaste(): Boolean = likes.isNotEmpty()
+
+    /** Berubah setiap kali penilaian berubah (dipakai untuk memuat ulang rekomendasi). */
+    fun tasteSignature(): String = likes.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }.hashCode().toString()
+
     /** Genre favorit (urut dari yang paling disukai). */
     fun topGenres(): List<String> = likedGenres.filter { it.value > 0 }.entries.sortedByDescending { it.value }.map { it.key }
 

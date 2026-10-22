@@ -177,37 +177,48 @@ class HomeViewModel : ViewModel() {
 
     fun loadRecommendations() {
         val liked = Library.likedTitles.toList()
-        if (liked.size < MIN_LIKES) {
+        if (!Library.hasTaste()) {
             recommended = emptyList()
+            recoSignature = ""
             return
         }
-        val signature = liked.take(8).joinToString("|") { it.key } + "#" + rows.size
+        val signature = Library.tasteSignature() + "#" + rows.size
         if (signature == recoSignature) return
         recoSignature = signature
         viewModelScope.launch {
-            // 1) TMDB: "rekomendasi" dari judul yang paling baru disukai
-            val tmdbLists = if (com.moviebox.app.data.Tmdb.enabled) {
-                liked.take(6).map { t ->
-                    async { com.moviebox.app.data.Tmdb.recommendations(t) }
-                }.map { it.await() }
+            val tmdb = com.moviebox.app.data.Tmdb.enabled
+            // 1) TMDB: rekomendasi dari judul yang paling baru disukai
+            val fromLiked = if (tmdb) {
+                liked.take(5).map { t -> async { com.moviebox.app.data.Tmdb.recommendations(t) } }.map { it.await() }
             } else emptyList()
-            val fromTmdb = mutableListOf<Title>()
-            for (i in 0 until 20) tmdbLists.forEach { l -> l.getOrNull(i)?.let { fromTmdb += it } }
-            // 2) Judul di beranda yang genrenya cocok dengan selera
-            val fav = Library.topGenres().take(3)
-            val fromGenres = if (com.moviebox.app.data.Tmdb.enabled && fav.isNotEmpty()) {
-                runCatching { com.moviebox.app.data.Tmdb.byGenre(fav.first(), liked.first().isSeries, 1) }.getOrDefault(emptyList())
+            val mixed = mutableListOf<Title>()
+            for (i in 0 until 20) fromLiked.forEach { l -> l.getOrNull(i)?.let { mixed += it } }
+            // 2) Genre favorit (film & serial)
+            val fav = Library.topGenres().take(2)
+            val fromGenres = if (tmdb) {
+                fav.flatMap { g ->
+                    listOf(
+                        async { runCatching { com.moviebox.app.data.Tmdb.byGenre(g, false, 1) }.getOrDefault(emptyList()) },
+                        async { runCatching { com.moviebox.app.data.Tmdb.byGenre(g, true, 1) }.getOrDefault(emptyList()) },
+                    )
+                }.map { it.await() }.flatten()
             } else emptyList()
-            val fromRows = rows.values.flatten().filter { Library.affinity(it) > 0 }
+            // 3) Judul di beranda (selalu ada, juga kalau baru menekan "Bukan untuk Saya")
+            val fromRows = rows.values.flatten()
             val likedKeys = liked.map { it.key }.toSet()
-            val likedNames = liked.map { it.title.lowercase() }.toSet()
-            val avail = com.moviebox.app.data.Resolver.notMissing(
-                (fromTmdb + fromGenres).filterNot(com.moviebox.app.data.Tmdb::isJunk).distinctBy { it.key }.take(40),
-            )
-            recommended = (avail.take(20) + Library.personalize(fromRows) + avail.drop(20))
-                .filter { it.key !in likedKeys && it.title.lowercase() !in likedNames && Library.taste(it) == 0 }
+            val pool = (mixed + fromGenres + fromRows)
+                .filterNot(com.moviebox.app.data.Tmdb::isJunk)
+                .filter { it.key !in likedKeys && Library.taste(it) == 0 }
                 .distinctBy { it.key }
                 .distinctBy { it.title.lowercase() }
+            val rank = pool.withIndex().associate { (i, t) -> t.key to i }
+            recommended = com.moviebox.app.data.Resolver.notMissing(pool)
+                // genre yang tidak disukai disingkirkan, yang disukai naik; urutan sumber sebagai penentu seri
+                .filter { Library.affinity(it) >= 0 }
+                .sortedWith(
+                    compareByDescending<Title> { Library.affinity(it) }
+                        .thenBy { rank[it.key] ?: Int.MAX_VALUE },
+                )
                 .take(30)
         }
     }
@@ -323,9 +334,9 @@ fun HomeScreen(
 ) {
     val heroItems = vm.heroItems()
     androidx.compose.runtime.LaunchedEffect(com.moviebox.app.data.Tmdb.enabled) { vm.checkMode() }
-    val likedCount = Library.likedTitles.size
+    val taste = Library.tasteSignature()
     val loadedRows = vm.rows.size
-    androidx.compose.runtime.LaunchedEffect(likedCount, Library.likedTitles.firstOrNull()?.key, loadedRows) {
+    androidx.compose.runtime.LaunchedEffect(taste, loadedRows) {
         vm.loadRecommendations()
     }
     val main = vm.mainRows().filter(vm::keepRow)
@@ -379,7 +390,7 @@ fun HomeScreen(
                     HomeFilter.MOVIES -> !it.isSeries
                 }
             }
-            if (Library.likedTitles.size >= MIN_LIKES && reco.isNotEmpty()) {
+            if (Library.hasTaste() && reco.isNotEmpty()) {
                 item(key = "reco") { TitleRow("Rekomendasi untukmu", reco, onOpen, onDetails) }
             }
 
