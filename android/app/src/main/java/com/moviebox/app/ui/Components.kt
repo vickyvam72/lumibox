@@ -121,7 +121,7 @@ fun Poster(
         )
         val tmdb = rememberTmdb(item)
         AsyncImage(
-            model = tmdb?.poster ?: cleanPoster(item.poster, item.imdbId),
+            model = com.moviebox.app.data.PosterFix.get(item) ?: tmdb?.poster ?: cleanPoster(item.poster, item.imdbId),
             contentDescription = item.title,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),

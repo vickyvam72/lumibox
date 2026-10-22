@@ -215,6 +215,19 @@ fun DetailScreen(
                         Spacer(Modifier.height(6.dp))
                         Text(info.genres.joinToString("  •  "), color = TextDim, fontSize = 13.sp)
                     }
+                    // Data TMDB kadang memakai poster judul lain → pengguna bisa ganti ke poster MovieBox.
+                    val fixed = com.moviebox.app.data.PosterFix.get(t)
+                    val mbPoster = d?.poster
+                    if (fixed != null || mbPoster != null) {
+                        Text(
+                            if (fixed != null) "Kembalikan poster TMDB" else "Poster salah? Pakai poster MovieBox",
+                            color = AccentLight,
+                            fontSize = 12.sp,
+                            modifier = Modifier
+                                .clickable { com.moviebox.app.data.PosterFix.set(t, if (fixed != null) null else mbPoster) }
+                                .padding(vertical = 6.dp),
+                        )
+                    }
                     Spacer(Modifier.height(14.dp))
 
                     when {

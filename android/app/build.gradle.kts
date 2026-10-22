@@ -12,8 +12,8 @@ android {
         applicationId = "com.moviebox.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "1.0.1"
+        versionCode = 22
+        versionName = "1.0.2"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")

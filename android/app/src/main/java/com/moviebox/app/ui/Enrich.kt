@@ -54,7 +54,7 @@ fun mergeInfo(t: Title, tmdb: TmdbInfo?, meta: AddonMeta?, d: Details?): Display
     return DisplayInfo(
         title = tmdb?.title?.takeIf { it.isNotBlank() } ?: t.title.ifBlank { d?.title ?: "" },
         logo = tmdb?.logo,
-        poster = tmdb?.poster ?: t.poster ?: d?.poster,
+        poster = com.moviebox.app.data.PosterFix.get(t) ?: tmdb?.poster ?: t.poster ?: d?.poster,
         backdrop = tmdb?.backdrop ?: t.backdrop ?: meta?.background,
         description = tmdb?.overview?.takeIf { it.isNotBlank() }
             ?: meta?.description ?: t.description ?: d?.description,
