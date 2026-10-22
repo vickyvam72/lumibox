@@ -110,14 +110,29 @@ fun Poster(
             maxLines = 4,
             overflow = TextOverflow.Ellipsis,
         )
+        val tmdb = rememberTmdb(item)
         AsyncImage(
-            model = rememberPoster(item),
+            model = tmdb?.poster ?: item.poster,
             contentDescription = item.title,
             contentScale = ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
         )
         if (rank != null) {
             Top10Badge(Modifier.align(Alignment.TopStart))
+        }
+        val score = (tmdb?.score ?: item.rating)?.toDoubleOrNull()?.takeIf { it > 0 }
+        if (score != null) {
+            Text(
+                "★ " + "%.1f".format(java.util.Locale.US, score),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(4.dp)
+                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(4.dp))
+                    .padding(horizontal = 5.dp, vertical = 1.dp),
+                color = AccentLight,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+            )
         }
         if (item.isSeries) {
             Text(
@@ -164,7 +179,7 @@ fun TitleRow(
             contentPadding = PaddingValues(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            itemsIndexed(items, key = { _, it -> it.key }) { index, item ->
+            itemsIndexed(items.distinctBy { it.key }, key = { _, it -> it.key }) { index, item ->
                 Poster(
                     item = item,
                     onClick = { onOpen(item) },

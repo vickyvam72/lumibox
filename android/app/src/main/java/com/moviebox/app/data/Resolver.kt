@@ -17,10 +17,12 @@ object Resolver {
         prefs = context.getSharedPreferences("lumibox_resolve", Context.MODE_PRIVATE)
     }
 
+    private fun cacheKey(t: Title): String? = t.imdbId ?: t.tmdbId?.let { "tmdb:${if (t.isSeries) "tv" else "movie"}:$it" }
+
     fun cached(t: Title): String? {
         if (t.id.isNotBlank()) return t.id
-        val imdb = t.imdbId ?: return null
-        return prefs.getString(imdb, null)
+        val key = cacheKey(t) ?: return null
+        return prefs.getString(key, null)
     }
 
     suspend fun subjectId(t: Title): String {
@@ -31,8 +33,12 @@ object Resolver {
             val original = Addon.originalName(if (t.isSeries) "series" else "movie", t.imdbId)
             if (original != null && names.add(original)) match = findMatch(original, t)
         }
+        if (match == null && t.tmdbId != null) {
+            val english = Tmdb.englishTitle(t)
+            if (english != null && names.add(english)) match = findMatch(english, t)
+        }
         if (match == null) throw IOException("\"${t.title}\" belum tersedia di MovieBox.")
-        t.imdbId?.let { prefs.edit().putString(it, match).apply() }
+        cacheKey(t)?.let { prefs.edit().putString(it, match).apply() }
         return match
     }
 

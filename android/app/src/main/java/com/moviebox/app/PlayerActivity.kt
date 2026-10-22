@@ -159,8 +159,9 @@ class PlayerActivity : ComponentActivity() {
             year = intent.getStringExtra(EXTRA_YEAR),
             poster = intent.getStringExtra(EXTRA_POSTER),
             imdbId = intent.getStringExtra(EXTRA_IMDB),
+            tmdbId = intent.getStringExtra(EXTRA_TMDB),
         )
-        if (title.id.isBlank() && title.imdbId.isNullOrBlank()) {
+        if (title.id.isBlank() && title.imdbId.isNullOrBlank() && title.tmdbId.isNullOrBlank() && title.title.isBlank()) {
             finish()
             return
         }
@@ -1333,6 +1334,7 @@ class PlayerActivity : ComponentActivity() {
         private const val EXTRA_SERIES = "series"
         private const val EXTRA_YEAR = "year"
         private const val EXTRA_IMDB = "imdb"
+        private const val EXTRA_TMDB = "tmdb"
         private const val EXTRA_SEASON = "season"
         private const val EXTRA_EPISODE = "episode"
 
@@ -1346,6 +1348,7 @@ class PlayerActivity : ComponentActivity() {
                     .putExtra(EXTRA_SERIES, title.isSeries)
                     .putExtra(EXTRA_YEAR, title.year)
                     .putExtra(EXTRA_IMDB, title.imdbId)
+                    .putExtra(EXTRA_TMDB, title.tmdbId)
                     .putExtra(EXTRA_SEASON, season)
                     .putExtra(EXTRA_EPISODE, episode),
             )

@@ -38,6 +38,8 @@ object Addon {
             val config = JSONObject(String(android.util.Base64.decode(encoded, flags)))
             config.put("posterEnabled", false)
             config.put("backdropEnabled", false)
+            config.put("logoEnabled", false)
+            config.put("thumbnailEnabled", false)
             val reEncoded = android.util.Base64.encodeToString(config.toString().toByteArray(), flags)
             ADDON_MANIFEST.substring(0, afterToken) + reEncoded + "/manifest.json"
         }.getOrDefault(ADDON_MANIFEST)
@@ -98,10 +100,17 @@ object Addon {
         } else {
             "$base/catalog/${c.type}/${Uri.encode(c.id)}.json"
         }
-        val items = withContext(Dispatchers.IO) {
-            getJson(url).optJSONArray("metas").objects().mapNotNull { parseMeta(it, c.type) }
-        }.distinctBy { it.key }
-        catalogItems[cacheKey] = items
+        val stored = "cat_${cacheKey}"
+        val metas = try {
+            withContext(Dispatchers.IO) { getJson(url).optJSONArray("metas") ?: JSONArray() }.also {
+                if (it.length() > 0) prefs.edit().putString(stored, it.toString()).apply()
+            }
+        } catch (e: Exception) {
+            // Server lambat/gagal: pakai daftar terakhir yang tersimpan (bukan daftar acak).
+            prefs.getString(stored, null)?.let { JSONArray(it) } ?: throw e
+        }
+        val items = metas.objects().mapNotNull { parseMeta(it, c.type) }.distinctBy { it.key }
+        if (items.isNotEmpty()) catalogItems[cacheKey] = items
         return items
     }
 

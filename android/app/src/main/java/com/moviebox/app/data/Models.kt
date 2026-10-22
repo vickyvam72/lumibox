@@ -16,10 +16,12 @@ data class Title(
     val rating: String? = null,
     val description: String? = null,
     val genres: List<String> = emptyList(),
+    /** ID TMDB (dari daftar TMDB discover). */
+    val tmdbId: String? = null,
 ) {
     /** Kunci unik untuk daftar/navigasi. */
     val key: String
-        get() = id.ifBlank { imdbId ?: title }
+        get() = id.ifBlank { imdbId ?: tmdbId?.let { "tmdb$it" } ?: title }
 }
 
 data class Section(

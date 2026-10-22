@@ -34,7 +34,7 @@ const WEB_DOMAINS: &[&str] = &[
 ];
 
 pub struct WebEngine {
-    http: reqwest::Client,
+    pub(crate) http: reqwest::Client,
     client_info: String,
     token: Mutex<Option<String>>,
     detail_paths: Mutex<HashMap<String, String>>,
@@ -56,7 +56,7 @@ fn put(headers: &mut HeaderMap, name: &'static str, value: &str) {
     }
 }
 
-fn as_id(v: Option<&Value>) -> Option<String> {
+pub(crate) fn as_id(v: Option<&Value>) -> Option<String> {
     let v = v?;
     v.as_str()
         .map(str::to_string)
@@ -65,7 +65,7 @@ fn as_id(v: Option<&Value>) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-fn as_u64(v: Option<&Value>) -> Option<u64> {
+pub(crate) fn as_u64(v: Option<&Value>) -> Option<u64> {
     let v = v?;
     v.as_u64()
         .or_else(|| v.as_i64().map(|n| n.max(0) as u64))
@@ -73,7 +73,7 @@ fn as_u64(v: Option<&Value>) -> Option<u64> {
 }
 
 /// Resolusi tertinggi yang disebut di string seperti "1080,720,480".
-fn best_height(resolutions: &str) -> u64 {
+pub(crate) fn best_height(resolutions: &str) -> u64 {
     resolutions
         .split(|c: char| !c.is_ascii_digit())
         .filter_map(|s| s.parse::<u64>().ok())
@@ -83,16 +83,16 @@ fn best_height(resolutions: &str) -> u64 {
 }
 
 /// Video "notice" (pesan update aplikasi) — bukan film sungguhan.
-fn is_notice(url: &str, duration: Option<u64>) -> bool {
+pub(crate) fn is_notice(url: &str, duration: Option<u64>) -> bool {
     adapt::is_deprecation_notice_url(url) || duration.is_some_and(|d| d > 0 && d < 90)
 }
 
 /// Sama dengan extract_policy_resource() di api.py.
-fn mpd_from_sign_cookie(cookie: &str) -> Option<String> {
+pub(crate) fn mpd_from_sign_cookie(cookie: &str) -> Option<String> {
     adapt::resolve_dash_manifest_from_policy(cookie)
 }
 
-fn clean_cookie(cookie: &str) -> String {
+pub(crate) fn clean_cookie(cookie: &str) -> String {
     cookie
         .trim_end_matches(';')
         .split(';')
@@ -176,7 +176,7 @@ impl WebEngine {
         h
     }
 
-    async fn token(&self, force: bool) -> Result<String, String> {
+    pub(crate) async fn token(&self, force: bool) -> Result<String, String> {
         let mut guard = self.token.lock().await;
         if !force {
             if let Some(t) = guard.as_ref() {
@@ -337,13 +337,16 @@ impl WebEngine {
         };
 
         let native = self.native_play(subject_id, season, episode);
-        let ((web_items, web_lines), (native_items, native_line)) = tokio::join!(web, native);
+        let apig = crate::apig::streams(self, subject_id, season, episode);
+        let ((web_items, web_lines), (native_items, native_line), (apig_items, apig_lines)) =
+            tokio::join!(web, native, apig);
         diag.extend(web_lines);
         diag.push(native_line);
+        diag.extend(apig_lines);
 
         let mut seen = HashSet::new();
         let mut out = Vec::new();
-        for v in web_items.into_iter().chain(native_items) {
+        for v in web_items.into_iter().chain(native_items).chain(apig_items) {
             let url = v.get("url").and_then(|u| u.as_str()).unwrap_or("").to_string();
             if !url.is_empty() && seen.insert(url) {
                 out.push(v);
@@ -354,9 +357,11 @@ impl WebEngine {
 
     async fn native_play(&self, subject_id: &str, season: usize, episode: usize) -> (Vec<Value>, String) {
         let body = match self
-            .native_get(&format!(
-                "/wefeed-mobile-bff/subject-api/play-info?subjectId={subject_id}&se={season}&ep={episode}"
-            ))
+            .native_get(&if season == 0 && episode == 0 {
+                format!("/wefeed-mobile-bff/subject-api/play-info?subjectId={subject_id}")
+            } else {
+                format!("/wefeed-mobile-bff/subject-api/play-info?subjectId={subject_id}&se={season}&ep={episode}")
+            })
             .await
         {
             Ok(b) => b,
@@ -603,7 +608,7 @@ fn short_err(e: &reqwest::Error) -> &'static str {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn stream_json(
+pub(crate) fn stream_json(
     source: &str,
     format: &str,
     height: u64,

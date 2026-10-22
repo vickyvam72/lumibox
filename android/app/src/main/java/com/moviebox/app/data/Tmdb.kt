@@ -16,6 +16,8 @@ import java.util.concurrent.ConcurrentHashMap
 
 /** Info tambahan dari TMDB. */
 data class TmdbInfo(
+    val title: String?,
+    val logo: String?,
     val poster: String?,
     val backdrop: String?,
     val overview: String?,
@@ -71,19 +73,68 @@ object Tmdb {
         return result
     }
 
-    private fun cacheKey(t: Title) = t.imdbId ?: "${t.title}|${t.year}|${t.isSeries}"
+    private fun cacheKey(t: Title) = t.imdbId ?: t.tmdbId?.let { "tmdb$it" } ?: "${t.title}|${t.year}|${t.isSeries}"
+
+    /**
+     * Daftar rilis terbaru dari TMDB (cadangan kalau addon tidak bisa dibuka).
+     * local = asal Indonesia; global = selain Indonesia, rilis 6 bulan terakhir yang cukup dikenal.
+     */
+    suspend fun latest(series: Boolean, local: Boolean): List<Title> = withContext(Dispatchers.IO) {
+        if (!enabled) return@withContext emptyList()
+        val today = java.time.LocalDate.now()
+        val from = today.minusMonths(if (local) 12 else 6)
+        val type = if (series) "tv" else "movie"
+        val dateKey = if (series) "first_air_date" else "primary_release_date"
+        val params = mutableMapOf(
+            "language" to "id-ID",
+            "sort_by" to "popularity.desc",
+            "$dateKey.gte" to from.toString(),
+            "$dateKey.lte" to today.toString(),
+            "include_adult" to "false",
+        )
+        if (local) {
+            params["with_origin_country"] = "ID"
+        } else {
+            params["without_origin_country"] = "ID"
+            params["vote_count.gte"] = if (series) "20" else "50"
+        }
+        val out = mutableListOf<Title>()
+        for (page in 1..2) {
+            params["page"] = page.toString()
+            val results = runCatching { get("/discover/$type", params) }.getOrNull()
+                ?.optJSONArray("results").objects()
+            results.forEach { r ->
+                val poster = r.str("poster_path") ?: return@forEach
+                val name = r.str("title") ?: r.str("name") ?: return@forEach
+                val date = r.str("release_date") ?: r.str("first_air_date")
+                val vote = r.optDouble("vote_average", 0.0)
+                out += Title(
+                    id = "",
+                    title = name,
+                    isSeries = series,
+                    year = date?.take(4),
+                    poster = "$IMG/w500$poster",
+                    backdrop = r.str("backdrop_path")?.let { "$IMG/w1280$it" },
+                    rating = if (vote > 0) "%.1f".format(java.util.Locale.US, vote) else null,
+                    description = r.str("overview"),
+                    tmdbId = r.opt("id")?.toString(),
+                )
+            }
+        }
+        out.distinctBy { it.key }
+    }
 
     private fun load(t: Title): TmdbInfo? {
         val type = if (t.isSeries) "tv" else "movie"
         val id = findId(t, type) ?: return null
 
-        val append = if (t.isSeries) "images,content_ratings" else "images,release_dates"
+        val append = if (t.isSeries) "images,content_ratings,translations" else "images,release_dates,translations"
         val detail = get(
             "/$type/$id",
             mapOf(
                 "language" to "id-ID",
                 "append_to_response" to append,
-                "include_image_language" to "id,en,null",
+                "include_image_language" to "id,en,null,${originalLangHint(t)}",
             ),
         )
         val originalLang = detail.str("original_language")
@@ -107,6 +158,28 @@ object Tmdb {
         var overview = detail.str("overview")
         if (overview.isNullOrBlank()) {
             overview = runCatching { get("/$type/$id", mapOf("language" to "en-US")).str("overview") }.getOrNull()
+        }
+
+        // Judul: Indonesia → Inggris → asli
+        val translations = detail.optJSONObject("translations")?.optJSONArray("translations").objects()
+        fun translatedTitle(lang: String): String? = translations
+            .firstOrNull { it.str("iso_639_1") == lang }
+            ?.optJSONObject("data")
+            ?.let { it.str("title") ?: it.str("name") }
+            ?.takeIf { it.isNotBlank() }
+        val originalTitle = detail.str("original_title") ?: detail.str("original_name")
+        val idTitle = translatedTitle("id")
+        val title = idTitle ?: translatedTitle("en") ?: originalTitle ?: detail.str("title") ?: detail.str("name")
+
+        // Logo: Indonesia; kalau judul Indonesia ada tapi logonya tidak, pakai teks; lalu Inggris → asli
+        val logos = detail.optJSONObject("images")?.optJSONArray("logos").objects()
+        fun logoFor(lang: String?) = logos.firstOrNull { it.str("iso_639_1") == lang }?.str("file_path")
+        val logo = logoFor("id")
+            ?: if (idTitle != null) null else (logoFor("en") ?: logoFor(originalLang) ?: logoFor(null))
+
+        // Deskripsi Indonesia dari terjemahan kalau overview utama kosong
+        if (overview.isNullOrBlank()) {
+            overview = translations.firstOrNull { it.str("iso_639_1") == "id" }?.optJSONObject("data")?.str("overview")
         }
 
         val genres = Genres.normalize(detail.optJSONArray("genres").objects().mapNotNull { it.str("name") })
@@ -133,6 +206,8 @@ object Tmdb {
         }
 
         return TmdbInfo(
+            title = title,
+            logo = logo?.let { "$IMG/w500$it" },
             poster = pickPoster()?.let { "$IMG/w500$it" },
             backdrop = backdrop?.let { "$IMG/w1280$it" },
             overview = overview,
@@ -143,7 +218,10 @@ object Tmdb {
         )
     }
 
+    private fun originalLangHint(t: Title): String = if (t.tmdbId != null) "ko,ja,zh,th,es,fr,hi" else "ko,ja"
+
     private fun findId(t: Title, type: String): String? {
+        t.tmdbId?.let { return it }
         val imdb = t.imdbId
         if (imdb != null && imdb.startsWith("tt")) {
             val found = get("/find/$imdb", mapOf("external_source" to "imdb_id"))
@@ -155,6 +233,16 @@ object Tmdb {
         t.year?.let { params[if (type == "tv") "first_air_date_year" else "year"] = it }
         val results = get("/search/$type", params).optJSONArray("results").objects()
         return results.firstOrNull()?.opt("id")?.toString()
+    }
+
+    /** Judul Inggris/asli (untuk mencocokkan ke MovieBox kalau judul Indonesia tidak ketemu). */
+    suspend fun englishTitle(t: Title): String? = withContext(Dispatchers.IO) {
+        if (!enabled) return@withContext null
+        val id = t.tmdbId ?: return@withContext null
+        runCatching {
+            val d = get("/${if (t.isSeries) "tv" else "movie"}/$id", mapOf("language" to "en-US"))
+            d.str("title") ?: d.str("name") ?: d.str("original_title") ?: d.str("original_name")
+        }.getOrNull()
     }
 
     /** Samakan label rating usia ke gaya Indonesia. */

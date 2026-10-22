@@ -20,6 +20,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             LumiTheme {
                 LumiApp()
+                CrashReportDialog()
             }
         }
     }
@@ -195,4 +197,39 @@ private fun BottomBar(nav: NavHostController, route: String?) {
             )
         }
     }
+}
+
+/** Kalau aplikasi sempat berhenti mendadak, tampilkan laporannya supaya bisa disalin & dikirim. */
+@Composable
+private fun CrashReportDialog() {
+    val context = LocalContext.current
+    var report by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(com.moviebox.app.data.Crash.last(context)) }
+    val text = report ?: return
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = {
+            com.moviebox.app.data.Crash.clear(context)
+            report = null
+        },
+        title = { Text("Aplikasi sempat berhenti") },
+        text = {
+            Text(
+                "Lumi Box tertutup mendadak sebelumnya. Salin laporan ini dan kirim ke pengembang supaya bisa diperbaiki.",
+            )
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("Laporan Lumi Box", text))
+                android.widget.Toast.makeText(context, "Laporan disalin", android.widget.Toast.LENGTH_SHORT).show()
+                com.moviebox.app.data.Crash.clear(context)
+                report = null
+            }) { Text("Salin laporan") }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                com.moviebox.app.data.Crash.clear(context)
+                report = null
+            }) { Text("Tutup") }
+        },
+    )
 }

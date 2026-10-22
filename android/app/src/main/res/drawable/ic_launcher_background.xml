@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <!-- biru muda (kiri atas) → biru tua (kanan bawah) -->
     <gradient
         android:angle="315"
-        android:startColor="#FF8FD6FF"
-        android:centerColor="#FF5AB8FF"
-        android:endColor="#FF2F7BEA"
+        android:startColor="#FF7CCBFF"
+        android:centerColor="#FF4A9CF5"
+        android:endColor="#FF1F5FD6"
         android:type="linear" />
 </shape>

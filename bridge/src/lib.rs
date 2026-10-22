@@ -17,6 +17,7 @@ use moviebox_tui::providers::models::{CatalogItem, ProviderKind};
 use moviebox_tui::providers::moviebox::adapt;
 use moviebox_tui::service::MovieBoxService;
 
+mod apig;
 mod lang;
 mod web;
 

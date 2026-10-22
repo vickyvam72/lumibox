@@ -7,8 +7,8 @@ import androidx.compose.ui.graphics.Color
 
 /** Warna khas Lumi Box: gradasi biru muda. */
 val Accent = Color(0xFF5AB8FF)
-val AccentDeep = Color(0xFF2F7BEA)
-val AccentLight = Color(0xFF8FD6FF)
+val AccentDeep = Color(0xFF1F5FD6)
+val AccentLight = Color(0xFF7CCBFF)
 val Background = Color(0xFF000000)
 val Surface1 = Color(0xFF141414)
 val Surface2 = Color(0xFF232323)

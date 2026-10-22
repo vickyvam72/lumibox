@@ -159,7 +159,7 @@ fun DetailScreen(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = bottomInset + 24.dp),
         ) {
-            item { Header(t, d, vm.meta, info.poster) }
+            item { Header(t, d, vm.meta, info.poster, info) }
 
             item {
                 Column(Modifier.padding(horizontal = 16.dp)) {
@@ -211,7 +211,7 @@ fun DetailScreen(
                         modifier = Modifier.fillMaxWidth(),
                     )
 
-                    val description = info.description
+                    val description = rememberIndonesian(info.description)
                     description?.let {
                         Spacer(Modifier.height(14.dp))
                         Text(it, color = Color.White, style = MaterialTheme.typography.bodyMedium)
@@ -249,7 +249,7 @@ fun DetailScreen(
                 }
 
                 val season = d.seasons.firstOrNull { it.number == vm.selectedSeason } ?: d.seasons.first()
-                items(season.episodes.sorted(), key = { "s${season.number}e$it" }) { ep ->
+                items(season.episodes.distinct().sorted(), key = { "s${season.number}e$it" }) { ep ->
                     val isCurrent = watched != null && watched.season == season.number && watched.episode == ep
                     val epMeta = vm.meta?.episode(season.number, ep)
                     EpisodeRow(
@@ -283,7 +283,7 @@ fun SeasonChips(d: Details, selected: Int, onSelect: (Int) -> Unit) {
         contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(d.seasons.sortedBy { it.number }, key = { it.number }) { s ->
+        items(d.seasons.distinctBy { it.number }.sortedBy { it.number }, key = { it.number }) { s ->
             val isSelected = s.number == selected
             Text(
                 "Season ${s.number}",
@@ -301,7 +301,7 @@ fun SeasonChips(d: Details, selected: Int, onSelect: (Int) -> Unit) {
 }
 
 @Composable
-private fun Header(t: Title, d: Details?, meta: AddonMeta?, poster: String?) {
+private fun Header(t: Title, d: Details?, meta: AddonMeta?, poster: String?, info: DisplayInfo) {
     Box(
         Modifier
             .fillMaxWidth()
@@ -325,7 +325,8 @@ private fun Header(t: Title, d: Details?, meta: AddonMeta?, poster: String?) {
                     ),
                 ),
         )
-        val logo = t.logo ?: meta?.logo
+        // Logo hanya dari TMDB (bahasa Indonesia → Inggris); selain itu judul teks berbahasa Indonesia.
+        val logo = info.logo
         if (logo != null) {
             AsyncImage(
                 model = logo,
@@ -340,7 +341,7 @@ private fun Header(t: Title, d: Details?, meta: AddonMeta?, poster: String?) {
             )
         } else {
             Text(
-                t.title.ifBlank { d?.title ?: "" },
+                info.title,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(horizontal = 16.dp),

@@ -37,6 +37,8 @@ fun rememberTmdb(item: Title): TmdbInfo? {
 
 /** Gabungan data tampilan dari semua sumber. */
 data class DisplayInfo(
+    val title: String,
+    val logo: String?,
     val poster: String?,
     val backdrop: String?,
     val description: String?,
@@ -50,6 +52,8 @@ data class DisplayInfo(
 fun mergeInfo(t: Title, tmdb: TmdbInfo?, meta: AddonMeta?, d: Details?): DisplayInfo {
     val durationMin = d?.durationSeconds?.let { (it / 60).toInt() }?.takeIf { it > 0 }
     return DisplayInfo(
+        title = tmdb?.title?.takeIf { it.isNotBlank() } ?: t.title.ifBlank { d?.title ?: "" },
+        logo = tmdb?.logo,
         poster = tmdb?.poster ?: t.poster ?: d?.poster,
         backdrop = tmdb?.backdrop ?: t.backdrop ?: meta?.background,
         description = tmdb?.overview?.takeIf { it.isNotBlank() }
@@ -99,4 +103,18 @@ fun InfoBadges(info: DisplayInfo, isSeries: Boolean, seasons: Int? = null) {
             androidx.compose.material3.Text(rest, color = Color.White.copy(alpha = 0.85f), fontSize = 13.sp)
         }
     }
+}
+
+/** Teks dalam Bahasa Indonesia; diterjemahkan otomatis kalau bukan. */
+@Composable
+fun rememberIndonesian(text: String?): String? {
+    if (text.isNullOrBlank()) return text
+    val result by produceState(
+        initialValue = com.moviebox.app.data.Translator.cached(text)
+            ?: if (com.moviebox.app.data.Translator.looksIndonesian(text)) text else null,
+        text,
+    ) {
+        value = com.moviebox.app.data.Translator.toIndonesian(text)
+    }
+    return result
 }

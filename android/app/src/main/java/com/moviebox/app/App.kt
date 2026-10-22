@@ -12,6 +12,7 @@ import com.moviebox.app.data.Tmdb
 class App : Application() {
     override fun onCreate() {
         super.onCreate()
+        com.moviebox.app.data.Crash.install(this)
         // Arahkan folder config/cache core Rust ke folder privat aplikasi.
         val result = Native.initCore(filesDir.absolutePath, cacheDir.absolutePath)
         Log.i("LumiBox", "core init: $result")
@@ -19,6 +20,7 @@ class App : Application() {
         Addon.init(this)
         Resolver.init(this)
         Tmdb.init(this)
+        com.moviebox.app.data.Translator.init(this)
         // Siapkan token/sesi MovieBox di latar supaya putar pertama lebih cepat.
         Repo.warmup()
     }

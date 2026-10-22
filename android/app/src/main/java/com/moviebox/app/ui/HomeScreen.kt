@@ -77,15 +77,13 @@ import kotlinx.coroutines.launch
 
 enum class HomeFilter { ALL, SERIES, MOVIES }
 
-/** Satu baris di beranda: dari katalog addon atau dari filter MovieBox. */
+/** Satu baris di beranda: katalog addon (rilis terbaru) dengan cadangan TMDB. */
 data class HomeRow(
     val key: String,
     val title: String,
     val isSeries: Boolean,
+    val local: Boolean,
     val catalog: AddonCatalog? = null,
-    val webTab: Int = 0,
-    val webGenre: String = "ALL",
-    val webCountry: String = "ALL",
 )
 
 class HomeViewModel : ViewModel() {
@@ -113,7 +111,6 @@ class HomeViewModel : ViewModel() {
 
     init {
         loadCatalogs()
-        loadMore()
     }
 
     private fun loadCatalogs() {
@@ -125,70 +122,33 @@ class HomeViewModel : ViewModel() {
         }
     }
 
-    /** 4 kategori utama: Film Lokal, Serial Lokal, Film Global, Serial Global. */
+    /** 4 kategori beranda: Film Lokal, Serial Lokal, Film Global, Serial Global (rilis terbaru). */
     fun mainRows(): List<HomeRow> {
-        fun find(series: Boolean, word: String) =
-            catalogs.firstOrNull { it.isSeries == series && it.name.contains(word, ignoreCase = true) }
-        val lokalFilm = find(false, "lokal") ?: find(false, "local")
-        val lokalSerial = find(true, "lokal") ?: find(true, "local")
-        val globalFilm = find(false, "global")
-        val globalSerial = find(true, "global")
+        fun find(series: Boolean, vararg words: String) = catalogs
+            .filter { it.isSeries == series && words.any { w -> it.name.contains(w, ignoreCase = true) } }
+            // utamakan katalog "rilis/terbaru/baru"
+            .sortedByDescending { c -> listOf("terbaru", "baru", "rilis", "latest", "new").count { c.name.contains(it, true) } }
+            .firstOrNull()
         return listOf(
-            lokalFilm?.let { HomeRow("main-film-lokal", "Film Lokal", false, catalog = it) }
-                ?: HomeRow("main-film-lokal", "Film Lokal", false, webTab = MovieBoxWeb.TAB_MOVIES, webCountry = "Indonesia"),
-            lokalSerial?.let { HomeRow("main-serial-lokal", "Serial Lokal", true, catalog = it) }
-                ?: HomeRow("main-serial-lokal", "Serial Lokal", true, webTab = MovieBoxWeb.TAB_SERIES, webCountry = "Indonesia"),
-            globalFilm?.let { HomeRow("main-film-global", "Film Global", false, catalog = it) }
-                ?: HomeRow("main-film-global", "Film Global", false, webTab = MovieBoxWeb.TAB_MOVIES),
-            globalSerial?.let { HomeRow("main-serial-global", "Serial Global", true, catalog = it) }
-                ?: HomeRow("main-serial-global", "Serial Global", true, webTab = MovieBoxWeb.TAB_SERIES),
+            HomeRow("main-film-lokal", "Film Lokal", isSeries = false, local = true, catalog = find(false, "lokal", "local", "indonesia")),
+            HomeRow("main-serial-lokal", "Serial Lokal", isSeries = true, local = true, catalog = find(true, "lokal", "local", "indonesia")),
+            HomeRow("main-film-global", "Film Global", isSeries = false, local = false, catalog = find(false, "global")),
+            HomeRow("main-serial-global", "Serial Global", isSeries = true, local = false, catalog = find(true, "global")),
         )
     }
 
-    /** Baris tambahan: platform populer dari addon + beberapa genre favorit. */
-    fun extraRows(): List<HomeRow> {
-        val used = mainRows().mapNotNull { it.catalog?.key }.toSet()
-        val fromAddon = catalogs.filter { it.key !in used }.map {
-            HomeRow("cat-${it.key}", prettyName(it.name), it.isSeries, catalog = it)
-        }
-        val genreRows = listOf(
-            HomeRow("g-horor-lokal", "Horor Indonesia", false, webTab = MovieBoxWeb.TAB_MOVIES, webGenre = "Horror", webCountry = "Indonesia"),
-            HomeRow("g-komedi", "Komedi Paling Seru", false, webTab = MovieBoxWeb.TAB_MOVIES, webGenre = "Comedy"),
-            HomeRow("g-anime", "Anime", true, webTab = MovieBoxWeb.TAB_SERIES, webGenre = "Anime"),
-            HomeRow("g-romantis", "Kisah Romantis", false, webTab = MovieBoxWeb.TAB_MOVIES, webGenre = "Romance"),
-        )
-        // Selang-seling supaya beranda tidak monoton.
-        val out = mutableListOf<HomeRow>()
-        val a = fromAddon.iterator()
-        val g = genreRows.iterator()
-        while (a.hasNext() || g.hasNext()) {
-            if (a.hasNext()) out += a.next()
-            if (a.hasNext()) out += a.next()
-            if (g.hasNext()) out += g.next()
-        }
-        return out
-    }
+    val failedRows = mutableStateMapOf<String, Boolean>()
 
-    private fun prettyName(name: String): String {
-        val parts = name.split("·").map { it.trim() }
-        return if (parts.size == 3 && parts[2].equals("Populer", true)) {
-            "${parts[1]} Populer di ${parts[0]}"
-        } else {
-            name
-        }
-    }
-
-    fun loadRow(r: HomeRow) {
-        if (rows.containsKey(r.key) || !loadingRows.add(r.key)) return
+    fun loadRow(r: HomeRow, force: Boolean = false) {
+        if ((!force && rows.containsKey(r.key)) || !loadingRows.add(r.key)) return
+        failedRows.remove(r.key)
         viewModelScope.launch {
-            val items = runCatching {
-                if (r.catalog != null) {
-                    Addon.catalog(r.catalog)
-                } else {
-                    MovieBoxWeb.filter(r.webTab, genre = r.webGenre, country = r.webCountry)
-                }
-            }.getOrDefault(emptyList())
-            rows[r.key] = items
+            var items = if (r.catalog != null) runCatching { Addon.catalog(r.catalog) }.getOrDefault(emptyList()) else emptyList()
+            if (items.isEmpty()) {
+                // Cadangan yang tetap relevan: TMDB rilis terbaru (butuh kunci TMDB).
+                items = runCatching { com.moviebox.app.data.Tmdb.latest(r.isSeries, r.local) }.getOrDefault(emptyList())
+            }
+            if (items.isEmpty()) failedRows[r.key] = true else rows[r.key] = items
             loadingRows.remove(r.key)
         }
     }
@@ -220,7 +180,6 @@ class HomeViewModel : ViewModel() {
     }
 
     fun refresh() {
-        if (loading) return
         refreshing = true
         page = 0
         seenIds.clear()
@@ -228,8 +187,9 @@ class HomeViewModel : ViewModel() {
         endReached = false
         rows.clear()
         loadingRows.clear()
-        if (catalogs.isEmpty()) loadCatalogs() else mainRows().forEach { loadRow(it) }
-        loadMore()
+        failedRows.clear()
+        if (catalogs.isEmpty()) loadCatalogs() else mainRows().forEach { loadRow(it, force = true) }
+        refreshing = false
     }
 
     fun keepRow(r: HomeRow) = when (filter) {
@@ -254,7 +214,6 @@ class HomeViewModel : ViewModel() {
         val lists = mainRows().filter(::keepRow).map { rows[it.key].orEmpty().take(3) }
         val out = mutableListOf<Title>()
         for (i in 0 until 3) lists.forEach { l -> l.getOrNull(i)?.let { out += it } }
-        if (out.isEmpty()) out += visibleSections().flatMap { it.items }.take(8)
         return out.distinctBy { it.key }.take(10)
     }
 
@@ -272,8 +231,6 @@ fun HomeScreen(
 ) {
     val heroItems = vm.heroItems()
     val main = vm.mainRows().filter(vm::keepRow)
-    val extra = vm.extraRows().filter(vm::keepRow)
-    val sections = vm.visibleSections()
     var showGenres by remember { mutableStateOf(false) }
 
     PullToRefreshBox(
@@ -301,46 +258,23 @@ fun HomeScreen(
 
             if (heroItems.isNotEmpty()) {
                 item(key = "hero") {
-                    HeroCarousel(items = heroItems, onPlay = onPlay, onDetails = onDetails)
+                    // Pager dibuat ulang kalau isinya berubah (mis. ganti chip Serial/Film).
+                    androidx.compose.runtime.key(heroItems.joinToString("|") { it.key }) {
+                        HeroCarousel(items = heroItems, onPlay = onPlay, onDetails = onDetails)
+                    }
                 }
-            } else if (vm.catalogsLoading || vm.loading) {
+            } else if (vm.catalogsLoading || main.any { vm.rows[it.key] == null && vm.failedRows[it.key] != true }) {
                 item(key = "loading") {
                     Box(Modifier.fillMaxWidth().height(420.dp)) { CenterLoading() }
                 }
-            } else if (vm.error != null && sections.isEmpty()) {
-                item(key = "error") { ErrorBox(vm.error ?: "", onRetry = { vm.refresh() }) }
             }
 
             if (Library.history.isNotEmpty() && vm.filter == HomeFilter.ALL) {
                 item(key = "continue") { ContinueRow(onPlayEntry = onPlay, onDetails = onDetails) }
             }
 
-            // 4 kategori utama
-            main.forEach { r -> rowItem(r, vm, onOpen, onDetails, top10 = false) }
-
-            // Top 10 dari MovieBox
-            sections.firstOrNull { !it.banner }?.let { top ->
-                item(key = "top10") {
-                    TitleRow("Top 10 Hari Ini", top.items.take(10), onOpen, onDetails, top10 = true)
-                }
-            }
-
-            // Baris tambahan (platform populer + genre)
-            extra.forEach { r -> rowItem(r, vm, onOpen, onDetails, top10 = false) }
-
-            // Sisa beranda MovieBox
-            sections.drop(1).forEachIndexed { index, section ->
-                item(key = "s-$index-${section.items.first().key}") {
-                    TitleRow(section.title, section.items, onOpen, onDetails)
-                }
-            }
-
-            item(key = "footer") {
-                if (!vm.endReached && vm.error == null) {
-                    LaunchedEffect(vm.sections.size) { vm.loadMore() }
-                    SmallLoading()
-                }
-            }
+            // Hanya 4 kategori: Film Lokal, Serial Lokal, Film Global, Serial Global
+            main.forEach { r -> rowItem(r, vm, onOpen, onDetails) }
         }
     }
 
@@ -360,14 +294,25 @@ private fun androidx.compose.foundation.lazy.LazyListScope.rowItem(
     vm: HomeViewModel,
     onOpen: (Title) -> Unit,
     onDetails: (Title) -> Unit,
-    top10: Boolean,
 ) {
     item(key = r.key) {
-        LaunchedEffect(r.key) { vm.loadRow(r) }
+        LaunchedEffect(r.key, vm.catalogsLoading) { if (!vm.catalogsLoading) vm.loadRow(r) }
         val items = vm.rows[r.key]
         when {
-            items == null -> RowPlaceholder(r.title)
-            items.isNotEmpty() -> TitleRow(r.title, items, onOpen, onDetails, top10 = top10)
+            items != null && items.isNotEmpty() -> TitleRow(r.title, items, onOpen, onDetails)
+            vm.failedRows[r.key] == true -> Column {
+                SectionTitle(r.title)
+                Text(
+                    "Gagal memuat. Tarik ke bawah untuk mencoba lagi" +
+                        if (!com.moviebox.app.data.Tmdb.enabled) ", atau isi Kunci TMDB di Lumi Saya." else ".",
+                    color = TextDim,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .clickable { vm.loadRow(r, force = true) },
+                )
+            }
+            else -> RowPlaceholder(r.title)
         }
     }
 }
@@ -528,9 +473,9 @@ private fun HeroCarousel(items: List<Title>, onPlay: (Title) -> Unit, onDetails:
             state = pager,
             contentPadding = PaddingValues(horizontal = 20.dp),
             pageSpacing = 12.dp,
-            key = { items[it].key },
+            key = { items.getOrNull(it)?.key ?: "p$it" },
         ) { page ->
-            val item = items[page]
+            val item = items.getOrNull(page) ?: return@HorizontalPager
             HeroCard(item = item, onPlay = { onPlay(item) }, onDetails = { onDetails(item) })
         }
         Spacer(Modifier.height(10.dp))
@@ -578,9 +523,9 @@ private fun HeroCard(item: Title, onPlay: () -> Unit, onDetails: () -> Unit) {
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            if (item.logo != null) {
+            if (info.logo != null) {
                 AsyncImage(
-                    model = item.logo,
+                    model = info.logo,
                     contentDescription = item.title,
                     contentScale = ContentScale.Fit,
                     modifier = Modifier
@@ -589,7 +534,7 @@ private fun HeroCard(item: Title, onPlay: () -> Unit, onDetails: () -> Unit) {
                 )
             } else {
                 Text(
-                    item.title,
+                    info.title,
                     color = Color.White,
                     fontWeight = FontWeight.Black,
                     fontSize = 26.sp,
