@@ -75,7 +75,7 @@ fun MyScreen(
             ) {
                 MenuTile(PlayerIcons.History, "History", Modifier.weight(1f), onHistory)
                 MenuTile(PlayerIcons.Download, "Unduhan", Modifier.weight(1f), onDownloads)
-                MenuTile(androidx.compose.material.icons.Icons.Default.Settings, "Setting", Modifier.weight(1f), onSettings)
+                MenuTile(PlayerIcons.Settings, "Setting", Modifier.weight(1f), onSettings)
             }
         }
 
